@@ -32,7 +32,7 @@ export const WelcomeView: React.FC<WelcomeViewProps> = ({ onSelectSuggestion }) 
 						<span className="text-[#2563eb]">DCMA</span> <span className="text-[#1e293b]">工业故障诊断助手</span>
 					</h1>
 					<p className="text-[14px] text-[#64748b] mt-1.5 font-normal tracking-wide">
-						基于 Pi Agent Harness，面向重大装备的智能运维与故障分析
+						DCMA Agent，面向重大装备的智能运维与故障分析
 					</p>
 				</div>
 

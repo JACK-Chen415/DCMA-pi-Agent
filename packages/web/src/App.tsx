@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { analyzeLocally } from "./analysis.ts";
 import { getBackendStatus, streamChat } from "./api.ts";
 import { ChatInput } from "./components/ChatInput";
 import { ChatView } from "./components/ChatView";
@@ -15,7 +14,7 @@ import { downloadText } from "./download.ts";
 import { createDemoDatasets, initialDevices } from "./mockData.ts";
 import { loadWorkspace, storageKey } from "./storage.ts";
 import { getMetrics, parseTelemetry, telemetryCsv } from "./telemetry.ts";
-import type { AppSettings, BackendStatus, ChatMessage, ToolId } from "./types.ts";
+import type { AppSettings, BackendStatus, ChatMessage } from "./types.ts";
 
 export function App() {
 	const [workspace, setWorkspace] = useState(loadWorkspace);
@@ -111,13 +110,8 @@ export function App() {
 			setNotice("当前会话已达到 200 条消息，请开启新对话。");
 			return;
 		}
-		if (
-			settings.mode === "pi" &&
-			(!settings.enabledTools.includes("pi_agent_harness") ||
-				!backend.connected ||
-				!backend.models.some((model) => model.id === settings.model))
-		) {
-			setNotice("Pi 模型不可用。请启用 Pi 工具、授权模型并在设置中选择，或切换为本地数据分析。");
+		if (!backend.connected || !backend.models.some((model) => model.id === settings.model)) {
+			setNotice("DCMA 模型不可用。请授权模型并在设置中选择。");
 			return;
 		}
 		const controller = new AbortController();
@@ -139,7 +133,7 @@ export function App() {
 			content: "",
 			timestamp: now,
 			status: "streaming",
-			engine: settings.mode === "pi" ? `Pi Agent · ${settings.model}` : "本地数据分析",
+			engine: `DCMA Agent · ${settings.model}`,
 		};
 		setWorkspace((state) => ({
 			...state,
@@ -174,24 +168,36 @@ export function App() {
 				),
 			}));
 		try {
-			const analysis = analyzeLocally(text, device, dataset, settings);
-			if (settings.mode === "local") updateReply((message) => ({ ...message, ...analysis, status: "done" }));
-			else {
-				await streamChat(
-					{
-						model: settings.model,
-						text: text.trim(),
-						context: analysis.content,
-						history: (conversation?.messages ?? [])
-							.filter((message) => message.status === "done")
-							.slice(-20)
-							.map(({ role, content }) => ({ role, content: content.slice(0, 8000) })),
-					},
-					controller.signal,
-					(delta) => updateReply((message) => ({ ...message, content: message.content + delta })),
-				);
-				updateReply((message) => ({ ...message, status: "done", structuredData: analysis.structuredData }));
-			}
+			const databasePreferred = settings.databaseEnabled !== false;
+			await streamChat(
+				{
+					model: settings.model,
+					text: text.trim(),
+					context: databasePreferred
+						? "设备台账及指标映射尚未确认，请读取数据库目录和实际记录。侧栏显示的数据不代表数据库。"
+						: JSON.stringify({
+								device,
+								source: dataset.source,
+								imported: dataset.imported,
+								alarmThreshold: settings.alarmThreshold,
+								units: { temperature: "℃", vibration: "mm/s", current: "A", speed: "rpm" },
+								totalSamples: dataset.samples.length,
+								samples: dataset.samples.slice(-200),
+								note: "仅提供最新最多200个采样点，不代表全量数据。设备台账为示例；示例测量值不能作为现场诊断依据，导入文件属于离线数据。",
+							}),
+					database: databasePreferred,
+					history: (conversation?.messages ?? [])
+						.filter((message) => message.status === "done")
+						.slice(-20)
+						.map(({ role, content }) => ({ role, content: content.slice(0, 8000) })),
+				},
+				controller.signal,
+				(delta) => updateReply((message) => ({ ...message, content: message.content + delta })),
+			);
+			updateReply((message) => ({
+				...message,
+				status: "done",
+			}));
 		} catch (error) {
 			updateReply((message) => ({
 				...message,
@@ -231,16 +237,6 @@ export function App() {
 		setModal(null);
 		setNotice("配置已应用并保存");
 	};
-	const toggleTool = (tool: ToolId) =>
-		setWorkspace((state) => ({
-			...state,
-			settings: {
-				...state.settings,
-				enabledTools: state.settings.enabledTools.includes(tool)
-					? state.settings.enabledTools.filter((item) => item !== tool)
-					: [...state.settings.enabledTools, tool],
-			},
-		}));
 	const quickAction = (action: string) => {
 		const queries: Record<string, string> = {
 			generate_report: `生成${device.name}的运行数据分析报表`,
@@ -299,15 +295,13 @@ export function App() {
 					onOpenHistory={() => setSidebarOpen(true)}
 					onOpenPanel={() => setPanelOpen(true)}
 					status={backend}
-					settings={settings}
 				/>
 				<div className="px-4 sm:px-6 text-[11px] text-slate-500 pb-2 flex flex-wrap gap-x-3">
 					<span>
 						{device.name} · {dataset.source}
 					</span>
-					{settings.mode === "pi" && !backend.models.length && (
-						<span className="text-amber-700">模型尚未授权，请打开设置</span>
-					)}
+					{settings.databaseEnabled !== false && <span>Agent 优先查询 MySQL；侧栏为独立示例/导入数据</span>}
+					{!backend.models.length && <span className="text-amber-700">模型尚未授权，请打开设置</span>}
 				</div>
 				{(notice || storageError) && (
 					<output className="block mx-4 mb-2 p-2 rounded-xl bg-amber-50 text-amber-800 text-xs">
@@ -315,11 +309,7 @@ export function App() {
 					</output>
 				)}
 				{conversation ? (
-					<ChatView
-						messages={conversation.messages}
-						isStreaming={busy}
-						canExport={settings.enabledTools.includes("auto_report")}
-					/>
+					<ChatView messages={conversation.messages} isStreaming={busy} />
 				) : (
 					<WelcomeView
 						onSelectSuggestion={(text) => {
@@ -335,8 +325,6 @@ export function App() {
 					disabled={busy}
 					onStop={stop}
 					onImport={openImport}
-					enabledTools={settings.enabledTools}
-					onToggleTool={toggleTool}
 				/>
 			</main>
 			<RightPanel

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { AppSettings, BackendStatus } from "../types.ts";
+import { DatabasePanel } from "./DatabasePanel";
 import { Modal } from "./Modal";
 export function SettingsModal({
 	settings,
@@ -15,7 +16,7 @@ export function SettingsModal({
 	onRefresh: () => void;
 }) {
 	const [draft, setDraft] = useState(settings);
-	const piUnavailable = !backend.connected || !backend.models.length;
+	const modelUnavailable = !backend.connected || !backend.models.length;
 	return (
 		<Modal title="系统与诊断核心设置" subtitle="保存后应用到当前工作台，并保存在本浏览器" onClose={onClose}>
 			<form
@@ -25,25 +26,6 @@ export function SettingsModal({
 				}}
 				className="space-y-5 text-sm"
 			>
-				<label className="block">
-					分析模式
-					<select
-						className="form-control"
-						value={draft.mode}
-						onChange={(event) =>
-							setDraft({
-								...draft,
-								mode: event.target.value === "pi" ? "pi" : "local",
-								model: draft.model || backend.models[0]?.id || "",
-							})
-						}
-					>
-						<option value="local">本地数据分析（无需模型授权）</option>
-						<option value="pi" disabled={piUnavailable}>
-							Pi Agent 模型对话{piUnavailable ? "（尚未授权模型）" : ""}
-						</option>
-					</select>
-				</label>
 				<p className="text-xs text-slate-500">
 					{backend.message}
 					<button type="button" onClick={onRefresh} className="ml-2 text-blue-600">
@@ -51,11 +33,11 @@ export function SettingsModal({
 					</button>
 				</p>
 				<label className="block">
-					Pi Agent 模型
+					DCMA Agent 模型
 					<select
 						className="form-control"
 						value={draft.model}
-						disabled={draft.mode !== "pi" || piUnavailable}
+						disabled={modelUnavailable}
 						onChange={(event) => setDraft({ ...draft, model: event.target.value })}
 					>
 						<option value="">请选择已授权模型</option>
@@ -66,6 +48,15 @@ export function SettingsModal({
 						))}
 					</select>
 				</label>
+				<label className="flex items-start gap-2 text-xs">
+					<input
+						type="checkbox"
+						checked={draft.databaseEnabled !== false}
+						onChange={(event) => setDraft({ ...draft, databaseEnabled: event.target.checked })}
+					/>
+					Agent 优先查询 MySQL（结果来自数据库工具，失败时不使用示例替代）
+				</label>
+				<DatabasePanel />
 				<div>
 					<p className="mb-2">本地服务状态检查频率</p>
 					<div className="grid grid-cols-3 gap-2">
@@ -97,8 +88,7 @@ export function SettingsModal({
 					/>
 				</label>
 				<p className="text-xs text-slate-500">
-					Pi 模型读取本机 Pi 授权配置或服务器环境变量。可在终端启动 Pi 并用 /login
-					授权，随后刷新模型列表；密钥不发送到浏览器。
+					DCMA Agent 的模型授权配置由本地后端读取。请配置服务器环境变量，随后刷新模型列表；密钥不发送到浏览器。
 				</p>
 				<div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
 					<button type="button" onClick={onClose} className="px-4 py-2 bg-slate-100 rounded-xl">
@@ -106,7 +96,7 @@ export function SettingsModal({
 					</button>
 					<button
 						type="submit"
-						disabled={draft.mode === "pi" && (!draft.model || piUnavailable)}
+						disabled={!draft.model || modelUnavailable}
 						className="px-4 py-2 bg-blue-600 text-white rounded-xl disabled:opacity-40"
 					>
 						保存并应用

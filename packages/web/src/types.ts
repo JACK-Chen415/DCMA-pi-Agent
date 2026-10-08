@@ -9,7 +9,6 @@ export interface Device {
 	image: string;
 }
 export type MetricKey = "temperature" | "vibration" | "current" | "speed";
-export type ToolId = "scada_telemetry" | "fault_kb" | "pi_agent_harness" | "auto_report";
 export interface TelemetrySample {
 	timestamp: string;
 	temperature?: number;
@@ -44,16 +43,6 @@ export interface ChatMessage {
 	timestamp: string;
 	status?: "streaming" | "done" | "error" | "cancelled";
 	engine?: string;
-	structuredData?: {
-		type: "diagnostic_report" | "sensor_chart" | "maintenance_plan" | "fault_code";
-		title: string;
-		source: string;
-		metrics?: Record<string, string>;
-		chartData?: ChartPoint[];
-		chartLabel?: string;
-		threshold?: number;
-		recommendations?: string[];
-	};
 }
 export interface ConversationItem {
 	id: string;
@@ -63,11 +52,10 @@ export interface ConversationItem {
 	messages: ChatMessage[];
 }
 export interface AppSettings {
-	mode: "local" | "pi";
+	databaseEnabled?: boolean;
 	model: string;
 	telemetryIntervalMs: number;
 	alarmThreshold: number;
-	enabledTools: ToolId[];
 }
 export interface BackendStatus {
 	connected: boolean;

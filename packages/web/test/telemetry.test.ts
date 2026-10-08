@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { analyzeLocally } from "../src/analysis.ts";
-import { defaultSettings, initialDevices } from "../src/mockData.ts";
 import { getMetrics, getSpectrum, parseTelemetry, telemetryCsv } from "../src/telemetry.ts";
 
 const fixture =
@@ -13,30 +11,6 @@ test("CSV import retains values and round-trips through export", () => {
 	assert.deepEqual(parseTelemetry(telemetryCsv(data.samples), "export.csv").samples, data.samples);
 	assert.equal(getMetrics(data.samples, 50)[0].value, 53);
 	assert.equal(getMetrics(data.samples, 50)[0].accentColor, "amber");
-});
-test("analysis distinguishes exceeded samples from contiguous events", () => {
-	const answer = analyzeLocally(
-		"统计温度超过50℃的次数",
-		initialDevices[0],
-		parseTelemetry(fixture, "samples.csv"),
-		defaultSettings,
-	);
-	assert.equal(answer.structuredData?.metrics?.超温采样点, "3");
-	assert.equal(answer.structuredData?.metrics?.连续超温事件, "2 次");
-	assert.equal(answer.structuredData?.threshold, 50);
-	assert.deepEqual(
-		answer.structuredData?.chartData?.map((point) => point.value),
-		[49, 51, 52, 48, 53],
-	);
-});
-test("date ranges and disabled tools cannot reuse unrelated measurements", () => {
-	const data = parseTelemetry(fixture, "samples.csv");
-	const empty = analyzeLocally("统计2025-01-01至2025-01-02温度", initialDevices[0], data, defaultSettings);
-	assert.equal(empty.structuredData?.metrics?.采样点, "0");
-	assert.match(empty.content, /没有采样数据/u);
-	const disabled = analyzeLocally("分析温度", initialDevices[0], data, { ...defaultSettings, enabledTools: [] });
-	assert.equal(disabled.structuredData?.chartData?.length, 0);
-	assert.match(disabled.content, /未启用/u);
 });
 test("invalid data is rejected without inventing missing channel values", () => {
 	assert.throws(() => parseTelemetry("timestamp,temp\nbad,50", "bad.csv"), /有效时间/u);

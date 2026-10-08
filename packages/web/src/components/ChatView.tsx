@@ -1,18 +1,10 @@
-import { Cpu, Download } from "lucide-react";
+import { Cpu, Download, User } from "lucide-react";
 import { useEffect, useRef } from "react";
-import { messageReport } from "../analysis.ts";
 import { downloadText } from "../download.ts";
+import { messageReport } from "../report.ts";
 import type { ChatMessage } from "../types.ts";
-import { LineChart } from "./LineChart";
-export function ChatView({
-	messages,
-	isStreaming,
-	canExport,
-}: {
-	messages: ChatMessage[];
-	isStreaming: boolean;
-	canExport: boolean;
-}) {
+import { MessageContent } from "./MessageContent";
+export function ChatView({ messages, isStreaming }: { messages: ChatMessage[]; isStreaming: boolean }) {
 	const bottom = useRef<HTMLDivElement>(null);
 	const last = messages.at(-1);
 	const scrollKey = `${messages.length}:${last?.id}:${last?.content.length}`;
@@ -45,48 +37,11 @@ export function ChatView({
 									{message.engine || "DCMA"} · {new Date(message.timestamp).toLocaleTimeString("zh-CN")}
 								</p>
 							)}
-							<div className="text-[13px] leading-relaxed whitespace-pre-wrap break-words">
-								{message.content
-									.split(/(\*\*[^*]+\*\*)/gu)
-									.map((part, index) =>
-										part.startsWith("**") && part.endsWith("**") ? (
-											<strong key={`${index}-${part}`}>{part.slice(2, -2)}</strong>
-										) : (
-											part
-										),
-									)}
-							</div>
-							{message.structuredData && (
-								<div className="mt-4 space-y-3 text-xs">
-									<h3 className="font-bold">{message.structuredData.title}</h3>
-									<p className="text-amber-700">{message.structuredData.source}</p>
-									<dl className="grid grid-cols-2 gap-2">
-										{Object.entries(message.structuredData.metrics ?? {}).map(([name, value]) => (
-											<div key={name} className="bg-slate-50 rounded-xl p-2">
-												<dt className="text-slate-500">{name}</dt>
-												<dd className="font-semibold mt-1">{value}</dd>
-											</div>
-										))}
-									</dl>
-									{!!message.structuredData.chartData?.length && (
-										<div className="bg-slate-50 rounded-xl p-2">
-											<p>
-												{message.structuredData.chartLabel} · 阈值 {message.structuredData.threshold} ℃
-											</p>
-											<LineChart
-												points={message.structuredData.chartData}
-												threshold={message.structuredData.threshold}
-												label={message.structuredData.chartLabel ?? "温度"}
-											/>
-										</div>
-									)}
-									{!!message.structuredData.recommendations?.length && (
-										<ul className="list-disc pl-5 bg-emerald-50 p-3 rounded-xl space-y-2">
-											{message.structuredData.recommendations.map((text) => (
-												<li key={text}>{text}</li>
-											))}
-										</ul>
-									)}
+							{message.role === "assistant" ? (
+								<MessageContent content={message.content} />
+							) : (
+								<div className="text-[13px] leading-relaxed whitespace-pre-wrap break-words">
+									{message.content}
 								</div>
 							)}
 							{message.status === "streaming" && (
@@ -97,7 +52,7 @@ export function ChatView({
 									{message.status === "error" ? "本次请求失败，可重新发送" : "生成已停止"}
 								</p>
 							)}
-							{message.role === "assistant" && message.status === "done" && canExport && (
+							{message.role === "assistant" && message.status === "done" && (
 								<button
 									type="button"
 									onClick={() =>
@@ -114,6 +69,15 @@ export function ChatView({
 								</button>
 							)}
 						</article>
+						{message.role === "user" && (
+							<span
+								role="img"
+								aria-label="用户头像"
+								className="h-8 w-8 shrink-0 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center"
+							>
+								<User className="w-4 h-4" aria-hidden="true" />
+							</span>
+						)}
 					</div>
 				))}
 				<div ref={bottom} />

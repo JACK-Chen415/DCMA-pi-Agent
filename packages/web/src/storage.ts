@@ -1,56 +1,8 @@
 import { createDemoDatasets, defaultSettings, initialDevices } from "./mockData.ts";
 import { parseTelemetry } from "./telemetry.ts";
-import type { AppSettings, ChatMessage, ConversationItem, Dataset, ToolId } from "./types.ts";
-
-function restoreReport(value: unknown): ChatMessage["structuredData"] {
-	if (!value || typeof value !== "object") return undefined;
-	const report = value as Record<string, unknown>;
-	if (
-		!["diagnostic_report", "sensor_chart", "maintenance_plan", "fault_code"].includes(String(report.type)) ||
-		typeof report.title !== "string" ||
-		typeof report.source !== "string"
-	)
-		return undefined;
-	const metrics =
-		report.metrics && typeof report.metrics === "object"
-			? Object.fromEntries(
-					Object.entries(report.metrics).filter(
-						(entry): entry is [string, string] => typeof entry[1] === "string",
-					),
-				)
-			: undefined;
-	const chartData = Array.isArray(report.chartData)
-		? report.chartData.slice(0, 10000).flatMap((item: unknown) => {
-				if (!item || typeof item !== "object") return [];
-				const point = item as Record<string, unknown>;
-				if (typeof point.name !== "string" || typeof point.value !== "number" || !Number.isFinite(point.value))
-					return [];
-				return [
-					{
-						name: point.name,
-						value: point.value,
-						time: typeof point.time === "number" && Number.isFinite(point.time) ? point.time : undefined,
-					},
-				];
-			})
-		: undefined;
-	return {
-		type: report.type as NonNullable<ChatMessage["structuredData"]>["type"],
-		title: report.title,
-		source: report.source,
-		metrics,
-		chartData,
-		chartLabel: typeof report.chartLabel === "string" ? report.chartLabel : undefined,
-		threshold:
-			typeof report.threshold === "number" && Number.isFinite(report.threshold) ? report.threshold : undefined,
-		recommendations: Array.isArray(report.recommendations)
-			? report.recommendations.filter((item): item is string => typeof item === "string")
-			: undefined,
-	};
-}
+import type { AppSettings, ConversationItem, Dataset } from "./types.ts";
 
 export const storageKey = "dcma-workspace-v1";
-const tools: ToolId[] = ["scada_telemetry", "fault_kb", "pi_agent_harness", "auto_report"];
 export interface WorkspaceState {
 	conversations: ConversationItem[];
 	activeId: string | null;
@@ -74,7 +26,7 @@ export function loadWorkspace(): WorkspaceState {
 		if (saved && typeof saved === "object") {
 			const settings = saved as Record<string, unknown>;
 			initial.settings = {
-				mode: settings.mode === "pi" ? "pi" : "local",
+				databaseEnabled: settings.databaseEnabled !== false,
 				model: typeof settings.model === "string" ? settings.model : "",
 				telemetryIntervalMs: [1000, 3000, 5000].includes(Number(settings.telemetryIntervalMs))
 					? Number(settings.telemetryIntervalMs)
@@ -85,9 +37,6 @@ export function loadWorkspace(): WorkspaceState {
 					settings.alarmThreshold <= 150
 						? settings.alarmThreshold
 						: 75,
-				enabledTools: Array.isArray(settings.enabledTools)
-					? settings.enabledTools.filter((tool): tool is ToolId => tools.includes(tool))
-					: defaultSettings.enabledTools,
 			};
 		}
 		if (typeof value.deviceId === "string" && initialDevices.some((device) => device.id === value.deviceId))
@@ -120,8 +69,7 @@ export function loadWorkspace(): WorkspaceState {
 							role: message.role,
 							content: message.content,
 							timestamp: message.timestamp,
-							engine: typeof message.engine === "string" ? message.engine : undefined,
-							structuredData: restoreReport(message.structuredData),
+							engine: typeof message.engine === "string" ? message.engine.replace(/^pi\b/iu, "DCMA") : undefined,
 							status:
 								message.status === "error"
 									? ("error" as const)

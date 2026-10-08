@@ -48,11 +48,9 @@ export const statusLabels: Record<Device["status"], string> = {
 	maintenance: "维护中",
 };
 export const defaultSettings: AppSettings = {
-	mode: "local",
 	model: "",
 	telemetryIntervalMs: 3000,
 	alarmThreshold: 75,
-	enabledTools: ["scada_telemetry", "fault_kb", "pi_agent_harness", "auto_report"],
 };
 export function createDemoDatasets(): Record<string, Dataset> {
 	const end = new Date();

@@ -64,6 +64,33 @@ body {
 }
 
 .panel-card { background: white; border: 1px solid #e2e8f0; border-radius: 1rem; padding: 1rem; }
+.message-markdown { min-width: 0; font-size: 13px; line-height: 1.75; overflow-wrap: anywhere; }
+.message-markdown > :first-child { margin-top: 0; }
+.message-markdown > :last-child { margin-bottom: 0; }
+.message-markdown p, .message-markdown ul, .message-markdown ol, .message-markdown blockquote, .message-markdown pre { margin: .8rem 0; }
+.message-markdown h1, .message-markdown h2, .message-markdown h3, .message-markdown h4, .message-markdown h5, .message-markdown h6 { margin: 1.2rem 0 .5rem; font-weight: 700; line-height: 1.4; }
+.message-markdown h1 { font-size: 1.35rem; }
+.message-markdown h2 { font-size: 1.15rem; }
+.message-markdown h3 { font-size: 1rem; }
+.message-markdown ul { list-style: disc; padding-left: 1.5rem; }
+.message-markdown ol { list-style: decimal; padding-left: 1.5rem; }
+.message-markdown li { margin: .25rem 0; }
+.message-markdown li > p { margin: .25rem 0; }
+.message-markdown blockquote { border-left: 3px solid #cbd5e1; padding-left: 1rem; color: #64748b; }
+.message-markdown a { color: #2563eb; text-decoration: underline; text-underline-offset: 3px; }
+.message-markdown :not(pre) > code { border-radius: .3rem; padding: .15rem .35rem; background: #f1f5f9; font-size: .9em; }
+.message-markdown pre { max-width: 100%; overflow-x: auto; border: 1px solid #e2e8f0; border-radius: .65rem; padding: .8rem 1rem; background: #f8fafc; line-height: 1.6; }
+.message-markdown pre code { white-space: pre; overflow-wrap: normal; }
+.message-markdown hr { margin: 1rem 0; border-top: 1px solid #e2e8f0; }
+.message-markdown img { max-width: 100%; border-radius: .5rem; }
+.message-table-scroll { max-width: 100%; overflow-x: auto; margin: 1rem 0; border: 1px solid #e2e8f0; border-radius: .65rem; }
+.message-table-scroll:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+.message-table-scroll table { width: 100%; min-width: 320px; border-collapse: collapse; font-size: 13px; }
+.message-table-scroll th, .message-table-scroll td { padding: .65rem .85rem; border-bottom: 1px solid #e2e8f0; vertical-align: top; min-width: 100px; }
+.message-table-scroll th { background: #f1f5f9; font-weight: 600; }
+.message-table-scroll tr:nth-child(even) td { background: #f8fafc; }
+.message-table-scroll tr:last-child td { border-bottom: 0; }
+.message-table-scroll th:not([align]), .message-table-scroll td:not([align]) { text-align: left; }
 .form-control { display: block; width: 100%; margin-top: .5rem; border: 1px solid #cbd5e1; border-radius: .75rem; padding: .65rem; background: #f8fafc; }
 .dialog-shell { width: min(680px, calc(100vw - 24px)); max-height: calc(100dvh - 32px); overflow: auto; }
 .dialog-shell::backdrop { background: rgb(15 23 42 / 40%); backdrop-filter: blur(3px); }
