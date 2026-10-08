@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.json",
+  "include": [
+    "server.ts",
+    "vite.config.ts",
+    "../coding-agent/src/utils/highlight-js.d.ts"
+  ],
+  "exclude": [
+    "dist",
+    "node_modules"
+  ],
+  "compilerOptions": {
+    "noEmit": true
+  }
+}
