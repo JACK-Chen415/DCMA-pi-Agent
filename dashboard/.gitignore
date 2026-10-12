@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+.playwright-cli/
+output/playwright/*
+!output/playwright/realtime-size-1920x1080.png
+!output/playwright/realtime-size-1366x900.png
+!output/playwright/realtime-size-768x1024.png
+!output/playwright/realtime-size-375x812.png
+!output/playwright/realtime-size-mobile-full.png

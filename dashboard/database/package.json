@@ -1,0 +1,14 @@
+{
+  "name": "@dcma/dashboard-database",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node main.ts",
+    "start": "node main.ts",
+    "check": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "mysql2": "3.24.5"
+  }
+}

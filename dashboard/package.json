@@ -1,0 +1,19 @@
+{
+  "name": "dcma-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": ["frontend", "database"],
+  "engines": { "node": ">=22.18.0" },
+  "scripts": {
+    "dev:frontend": "npm run dev --workspace frontend",
+    "dev:database": "npm run dev --workspace database",
+    "check": "npm run check --workspaces",
+    "build": "npm run build --workspace frontend",
+    "test": "node --test database/test/server.test.ts database/test/dashboard-query.test.ts database/test/code-events.test.ts frontend/test/dashboard.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "typescript": "7.0.2"
+  }
+}
