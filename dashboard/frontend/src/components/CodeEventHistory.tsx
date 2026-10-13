@@ -55,7 +55,7 @@ export function CodeEventHistory({ table }: { table: DashboardTable }) {
 			}}>
 				<DateTimeInput label="开始时间（北京时间）" value={from} onChange={setFrom} />
 				<DateTimeInput label="结束时间（北京时间）" showNow value={to} onChange={setTo} />
-				<button className="refresh-button" disabled={loading}>{loading ? "查询异常中…" : "查询异常"}</button>
+				<button className="refresh-button" aria-busy={loading} disabled={loading}>{loading ? "查询异常中…" : "查询异常"}</button>
 				<button type="button" className="code-reset" onClick={() => { setFrom(""); setTo(""); setRange({ from: "", to: "" }); setValidation(""); setPage(1); setReload((value) => value + 1); }}>全部时间</button>
 			</form>
 			<div aria-live="polite">{validation && <p className="notice error">{validation}</p>}{state.key === key && state.error && <p className="notice error">{data ? "历史查询失败，保留上次成功结果。" : ""}{state.error}</p>}{!!data?.invalidTimes && <p className="notice">{data.invalidTimes} 条采集时间无效的记录未参与事件时间计算。</p>}</div>

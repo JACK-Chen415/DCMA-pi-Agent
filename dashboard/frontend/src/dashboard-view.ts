@@ -21,9 +21,9 @@ export function codeClassName(field: DashboardField, value: unknown): string | u
 	return field === "fault_code" ? "fault-code-active" : field === "alarm_code" ? "alarm-code-active" : undefined;
 }
 
-export function displayValue(value: unknown): string {
+export function displayValue(value: unknown, maximumFractionDigits = 4): string {
 	if (value === null || value === undefined || value === "") return "—";
-	return typeof value === "number" ? value.toLocaleString("zh-CN", { maximumFractionDigits: 4 }) : String(value);
+	return typeof value === "number" ? value.toLocaleString("zh-CN", { maximumFractionDigits }) : String(value);
 }
 
 export function displayRaw(value: unknown): string {

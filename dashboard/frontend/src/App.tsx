@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { fieldLabels, numericFields, type DashboardField, type DashboardRange, type DashboardTable, type NumericField } from "./database-types.ts";
 import { displayTime, displayValue, displayRawField, codeClassName, displayFieldLabel, fieldUnits } from "./dashboard-view.ts";
 import { useDashboard } from "./useDashboard.ts";
@@ -29,12 +29,12 @@ const views = [
 	{ id: "settings", title: "系统配置", icon: "M4 7h16M4 17h16M8 4v6M16 14v6" },
 ] as const;
 type View = (typeof views)[number]["id"];
-const metricGroups: { title: string; fields: NumericField[] }[] = [
-	{ title: "运动参数", fields: ["speed_setpoint", "speed_actual", "torque_setpoint", "torque_actual"] },
-	{ title: "电气参数", fields: ["dc_voltage", "current_actual", "field_current", "torque_current", "pulse_frequency"] },
-	{ title: "功率参数", fields: ["actual_power", "motor_power", "feedback_power"] },
-	{ title: "温度参数", fields: ["air_intake_temp", "motor_temp", "inverter_temp", "inverter_radiator_temp"] },
-	{ title: "负荷参数", fields: ["inverter_load_rate", "motor_load_rate"] },
+const metricGroups: { title: string; icon: string; fields: NumericField[] }[] = [
+	{ title: "运动参数", icon: "M4 16l5-7 5 4 6-9M4 21h16", fields: ["speed_setpoint", "speed_actual", "torque_setpoint", "torque_actual"] },
+	{ title: "电气参数", icon: "m13 2-8 12h6l-1 8 9-13h-6l1-7Z", fields: ["dc_voltage", "current_actual", "field_current", "torque_current", "pulse_frequency"] },
+	{ title: "功率参数", icon: "M12 3v9M7 5a8 8 0 1 0 10 0", fields: ["actual_power", "motor_power", "feedback_power"] },
+	{ title: "温度参数", icon: "M9 5a3 3 0 0 1 6 0v9a5 5 0 1 1-6 0V5ZM12 8v9M18 6h3M18 10h3", fields: ["air_intake_temp", "motor_temp", "inverter_temp", "inverter_radiator_temp"] },
+	{ title: "负荷参数", icon: "M4 18a9 9 0 1 1 16 0M12 14l5-6M7 19h10", fields: ["inverter_load_rate", "motor_load_rate"] },
 ];
 const parameterGroups: { title: string; fields: DashboardField[] }[] = [
 	{ title: "设备信息", fields: ["device_name", "inverter_name"] },
@@ -100,7 +100,7 @@ export function App() {
 				<div className="sidebar-footer"><span className={`connection ${view === "settings" ? "" : error ? "failed" : data ? "connected" : ""}`} />{view === "settings" ? "系统配置 · 本机保存" : error ? "接口查询失败" : data ? "数据库查询成功" : browsingHistory && !range ? "等待历史查询" : "正在连接接口"}</div>
 			</aside>
 			<main className="dashboard-main">
-				<header className="page-header"><div><p className="eyebrow">电机监控 / {page.title}</p><h1>{page.title}</h1></div>{view !== "settings" && <div className="header-actions"><label>{browsingHistory ? "每页条数" : "采样条数"} <select aria-label={browsingHistory ? "每页条数" : "采样条数"} value={limit} onChange={(event) => { setLimit(Number(event.target.value) as 50 | 100 | 200); setSamplePage(1); }}>{[50, 100, 200].map((value) => <option key={value} value={value}>{value} 条</option>)}</select></label><button className="refresh-button" onClick={refresh} disabled={loading || (browsingHistory && !range)}>{loading ? "正在查询…" : browsingHistory ? "刷新查询" : "刷新数据"}</button></div>}</header>
+				<header className="page-header"><div><p className="eyebrow">电机监控 / {page.title}</p><h1>{page.title}</h1></div>{view !== "settings" && <div className="header-actions"><label>{browsingHistory ? "每页条数" : "采样条数"} <select aria-label={browsingHistory ? "每页条数" : "采样条数"} value={limit} onChange={(event) => { setLimit(Number(event.target.value) as 50 | 100 | 200); setSamplePage(1); }}>{[50, 100, 200].map((value) => <option key={value} value={value}>{value} 条</option>)}</select></label><button className="refresh-button" aria-busy={loading} onClick={refresh} disabled={loading || (browsingHistory && !range)}>{loading ? "正在查询…" : browsingHistory ? "刷新查询" : "刷新数据"}</button></div>}</header>
 				{view !== "settings" && <>
 				<section className="panel-card device-detail" aria-label="当前设备详情"><div className="detail-heading"><div><p className="eyebrow">当前设备{browsingHistory ? " · 历史采样" : ""}</p><h2>{latest ? displayValue(latest.raw.device_name) : `G120 电机 ${motor}`}</h2><p className="muted">变频器：{displayValue(latest?.raw.inverter_name)}</p></div><span className="source-badge">{sourceLabel}</span></div><div className="time-grid"><div><span>{browsingHistory ? "当前页最新采集（北京时间）" : "最后采集（北京时间）"}</span><strong>{displayTime(latest?.acquiredAt)}</strong></div><div><span>入库时间（北京时间）</span><strong>{displayTime(latest?.ingestedAt)}</strong></div><div><span>上次查询成功</span><strong>{displayTime(data?.queriedAt)}</strong></div><div><span>{browsingHistory ? "查询状态" : "采集更新状态"}</span><strong>{update}</strong></div></div></section>
 				<div aria-live="polite">{error && <p className="notice error">{data ? "刷新失败，以下保留上次成功结果。" : "当前选择查询失败。"}{error}</p>}{!loading && data && !latest && <p className="notice">{browsingHistory ? "所选时间段暂无采样记录。" : selectedSource?.message || "当前来源暂无采样记录。"}</p>}{warnings.map((warning) => <p className="notice" key={warning}>{warning}</p>)}</div>
@@ -117,20 +117,20 @@ export function App() {
 					}}>
 						<DateTimeInput label="开始时间（北京时间）" required value={from} onChange={setFrom} />
 						<DateTimeInput label="结束时间（北京时间）" required showNow value={to} onChange={setTo} />
-						<button className="refresh-button" disabled={loading}>{loading ? "查询采样中…" : "查询数据"}</button>
+						<button className="refresh-button" aria-busy={loading} disabled={loading}>{loading ? "查询采样中…" : "查询数据"}</button>
 						<button type="button" className="code-reset" onClick={() => { resetRange(); window.location.hash = "realtime"; }}>返回实时</button>
 					</form>
 					<div aria-live="polite">{validation && <p className="notice error">{validation}</p>}</div>
 					{range ? <><p className="muted small">查询范围：{displayTime(range.from, false, true)} ～ {displayTime(range.to, false, true)}（北京时间，包含起止时刻）</p><div className="event-pagination"><button className="code-reset" disabled={loading || samplePage <= 1} onClick={() => setSamplePage(samplePage - 1)}>上一页</button><span>第 {samplePage} / {Math.max(samplePage, pages)} 页 · 共 {samples.data?.total ?? "—"} 条</span><button className="code-reset" disabled={loading || !samples.data || samplePage >= pages} onClick={() => setSamplePage(samplePage + 1)}>下一页</button></div></> : <p className="muted">选择起止时间后查询历史采样，结果按采集时间从新到旧分页，趋势图展示当前页记录。</p>}
 				</section>}
 				{view === "overview" && <>
-					<section className="panel-card overview-intro"><div className="overview-copy"><div><p className="eyebrow">设备档案</p><h2>G120 电机 {motor}</h2></div><a className="text-link" href="#realtime">查看采样趋势 →</a></div><img className="equipment-illustration" src="/assets/illustrations/motor-drive.svg" alt="" aria-hidden="true" width="420" height="200" /></section>
+					<section className="panel-card overview-intro"><div className="overview-copy"><div><p className="eyebrow">设备档案</p><h2>G120 电机 {motor}</h2><p className="muted">查看这台电机与变频器的读数、趋势和采样记录。</p></div><a className="text-link" href="#realtime">查看采样趋势 →</a></div><figure className="equipment-figure"><img className="equipment-illustration" src="/assets/illustrations/motor-drive.svg" alt="电机与变频器连接关系的示意图" width="420" height="200" decoding="async" /><figcaption>电机与变频器 · 驱动链示意</figcaption></figure></section>
 					<section aria-label="运行信息" className="running-grid">{runningCards(runningFields)}</section>
 					<section className="panel-card" aria-label="完整参数">
 						<div className="section-heading"><h2>完整参数</h2><a className="text-link" href="#records">查看采样明细 →</a></div>
 						<div className="parameter-groups">{parameterGroups.map((group) => <section className="parameter-group" key={group.title} aria-label={group.title}>
 							<h3>{group.title}</h3>
-							<dl className="parameter-grid">{group.fields.map((field) => <div key={field}><dt>{displayFieldLabel(field)}</dt><dd className={codeClassName(field, latest?.raw[field])}>{displayRawField(field, latest?.raw[field])}</dd></div>)}</dl>
+							<dl className="parameter-grid">{group.fields.map((field) => <div key={field}><dt>{displayFieldLabel(field)}</dt><dd className={codeClassName(field, latest?.raw[field])}>{numericFields.includes(field as NumericField) ? displayValue(latest?.values[field as NumericField], 2) : displayRawField(field, latest?.raw[field])}</dd></div>)}</dl>
 						</section>)}</div>
 					</section>
 				</>}
@@ -143,7 +143,7 @@ export function App() {
 					{!browsingHistory && <><section aria-label="六项采样仪表" className="gauge-grid">{gaugeFields.map((field) => <Gauge key={field} label={fieldLabels[field]} unit={fieldUnits[field]!} value={latest?.values[field] ?? null} range={gaugeRanges[field]} samples={data?.samples.map((sample) => sample.values[field]) ?? []} />)}</section>
 					<section aria-label="运行信息" className="running-grid">{runningCards(runningFields)}</section><RecentEvents table={table} records={data?.records ?? []} loading={loading} /></>}
 				</>}
-				{view === "metrics" && <div className="metric-groups">{metricGroups.map((group) => <section className="panel-card" key={group.title} aria-label={group.title}><div className="section-heading"><div><h2>{group.title}</h2></div><span className="group-count">{group.fields.length} 项指标</span></div><div className="metric-grid">{group.fields.map((field) => <div className="metric-card" key={field}><span>{displayFieldLabel(field)}</span><strong>{displayValue(latest?.values[field])}</strong><div><a href="#realtime" onClick={() => setMetric(field)} aria-label={`查看${fieldLabels[field]}趋势`}>查看趋势 →</a></div></div>)}</div></section>)}</div>}
+				{view === "metrics" && <div className="metric-groups">{metricGroups.map((group) => <section className="panel-card metric-group" key={group.title} aria-label={group.title}><div className="section-heading"><div className="metric-group-title"><span className="category-icon"><NavIcon path={group.icon} /></span><h2>{group.title}</h2></div><span className="group-count">{group.fields.length} 项指标</span></div><div className="metric-grid" style={{ "--metric-count": group.fields.length } as CSSProperties}>{group.fields.map((field) => <a className="metric-card" key={field} href="#realtime" onClick={() => setMetric(field)} aria-label={`查看${fieldLabels[field]}趋势`}><span>{displayFieldLabel(field)}</span><strong>{displayValue(latest?.values[field])}</strong><NavIcon path="M7 17 17 7M7 7h10v10" /></a>)}</div></section>)}</div>}
 				{view === "codes" && <>
 					<section aria-label="当前代码" className="running-grid code-grid">{runningCards(codeFields)}</section>
 					<CodeAnalysis key={table} table={table} records={data?.records ?? []} loading={loading} truncated={data?.truncated ?? false} />
