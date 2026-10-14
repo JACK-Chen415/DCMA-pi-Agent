@@ -42,7 +42,7 @@ async (page) => {
 		const old = page.locator(".code-event-table tbody tr").filter({ hasText: "F01030" });
 		check((await old.innerText()).includes("2026/10/08 09:00:00.000") && (await old.innerText()).includes("2026/10/10 10:00:00.000"), "跨窗口事件起止时间缺失");
 		check((await old.innerText()).includes("2 天 1 小时"), "持续时间计算错误");
-		check((await page.locator(".code-event-table tbody tr").filter({ hasText: "A2062" }).innerText()).includes("未结束"), "未结束事件消失");
+		check((await page.locator(".code-event-table tbody tr").filter({ hasText: "A2062" }).innerText()).includes("未观察到结束"), "未结束事件观察口径错误");
 		check(await old.locator("td").nth(1).evaluate((node) => getComputedStyle(node).color) === "rgb(185, 28, 28)", "历史故障未标红");
 		await page.getByRole("button", { name: "下一页", exact: true }).click();
 		await page.getByText("第 2 / 2 页", { exact: true }).waitFor();

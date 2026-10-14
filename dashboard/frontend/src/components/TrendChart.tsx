@@ -33,6 +33,7 @@ export function TrendChart({ samples, fields, title }: { samples: DashboardSampl
 			const copy = svg.cloneNode(true) as SVGSVGElement;
 			copy.setAttribute("xmlns", "http://www.w3.org/2000/svg");
 			copy.setAttribute("width", "1000"); copy.setAttribute("height", "255");
+			copy.setAttribute("preserveAspectRatio", "xMidYMid meet");
 			const originalTexts = svg.querySelectorAll("text");
 			copy.querySelectorAll("text").forEach((text, index) => {
 				const style = getComputedStyle(originalTexts[index]);

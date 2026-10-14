@@ -1,12 +1,12 @@
 import { useState } from "react";
-import { fieldLabels, type DashboardRecord, type DashboardTable } from "../database-types.ts";
+import { fieldLabels, type CodeEvent, type DashboardRecord, type DashboardTable } from "../database-types.ts";
 import { codeClassName, displayRawField, displayTime } from "../dashboard-view.ts";
 import { CodeEventHistory } from "./CodeEventHistory.tsx";
 
 const abnormalFields = ["fault_code", "alarm_code"] as const;
 const recordFields = ["device_name", "inverter_name", "fault_code", "alarm_code", "control_word", "status_word"] as const;
 
-export function CodeAnalysis({ table, records, loading, truncated }: { table: DashboardTable; records: DashboardRecord[]; loading: boolean; truncated: boolean }) {
+export function CodeAnalysis({ table, records, loading, truncated, onViewEvent }: { table: DashboardTable; records: DashboardRecord[]; loading: boolean; truncated: boolean; onViewEvent: (event: CodeEvent) => void }) {
 	const [kind, setKind] = useState("all");
 	const [query, setQuery] = useState("");
 	const selectedFields = kind === "fault_code" || kind === "alarm_code" ? [kind] as const : abnormalFields;
@@ -15,7 +15,7 @@ export function CodeAnalysis({ table, records, loading, truncated }: { table: Da
 		(!query.trim() || selectedFields.some((field) => record.raw[field] !== null && String(record.raw[field]).toLocaleUpperCase().includes(query.trim().toLocaleUpperCase()))));
 	const reset = () => { setKind("all"); setQuery(""); };
 	return <>
-		<CodeEventHistory table={table} />
+		<CodeEventHistory table={table} onViewEvent={onViewEvent} />
 		<section className="panel-card" aria-label="代码采样记录">
 			<div className="section-heading"><h2>代码采样记录</h2><span className="group-count">{filtered.length} / {records.length} 条</span></div>
 			<div className="code-filters"><label>记录类型<select value={kind} onChange={(event) => setKind(event.target.value)}><option value="all">全部采样</option><option value="abnormal">异常采样</option><option value="fault_code">故障采样</option><option value="alarm_code">报警采样</option></select></label><label>查询代码<input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="输入故障码或报警码" /></label><button className="code-reset" onClick={reset} disabled={kind === "all" && !query}>重置筛选</button></div>

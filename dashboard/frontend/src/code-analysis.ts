@@ -1,5 +1,14 @@
 import { createCodeHistory } from "../../database/code-events.ts";
-import type { DashboardRecord, DashboardTable } from "./database-types.ts";
+import type { CodeEvent, DashboardRecord, DashboardTable } from "./database-types.ts";
+
+export function eventSamplingRange(event: CodeEvent) {
+	const start = Date.parse(event.startedAt), end = Date.parse(event.endedAt ?? event.lastSeenAt);
+	if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
+	return {
+		from: new Date(Math.floor((start - 300000) / 1000) * 1000).toISOString(),
+		to: new Date(Math.ceil((end + 300000) / 1000) * 1000).toISOString(),
+	};
+}
 
 export function recentCodeHistory(table: DashboardTable, records: DashboardRecord[]) {
 	const history = createCodeHistory({ table, page: 1 });
