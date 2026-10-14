@@ -39,6 +39,19 @@ export function sampleIdentity(record: DashboardRecord | null): string {
 	return record ? `${record.id}/${record.acquiredAt ?? record.raw.timestamp}` : "";
 }
 
+export function displaySampleAge(acquiredAt: string | null | undefined, queriedAt: string | null | undefined): string {
+	if (!acquiredAt || !queriedAt) return "—";
+	const milliseconds = Date.parse(queriedAt) - Date.parse(acquiredAt);
+	if (!Number.isFinite(milliseconds)) return "—";
+	if (milliseconds < 0) return "采集时间晚于查询时间";
+	const seconds = Math.floor(milliseconds / 1000);
+	if (!seconds) return "不足1秒";
+	if (seconds >= 86400) return `${Math.floor(seconds / 86400)}天 ${Math.floor(seconds % 86400 / 3600)}小时`;
+	if (seconds >= 3600) return `${Math.floor(seconds / 3600)}小时 ${Math.floor(seconds % 3600 / 60)}分`;
+	if (seconds >= 60) return `${Math.floor(seconds / 60)}分 ${seconds % 60}秒`;
+	return `${seconds}秒`;
+}
+
 export function sampleRange(values: (number | null)[]): { min: number; max: number } | null {
 	const valid = values.filter((value): value is number => value !== null && Number.isFinite(value));
 	if (!valid.length) return null;

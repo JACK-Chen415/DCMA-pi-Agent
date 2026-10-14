@@ -23,7 +23,8 @@ async (page) => {
 			await settingsNav.getByRole("link", { name: title, exact: true }).click();
 			check(await settingsNav.getByRole("link", { name: title, exact: true }).getAttribute("aria-current") === "page", `${title}子菜单未选中`);
 			await page.getByRole("heading", { name: title, exact: true, level: 2 }).waitFor();
-			if (title !== "通信配置") check(await page.getByText("页面内容待补充。", { exact: true }).count() === 1, `${title}应保留待补充页面`);
+			if (title === "设备配置") check(await page.getByRole("region", { name: "设备配置", exact: true }).locator("tbody tr").count() === 5, "设备来源核对缺少五个来源");
+			else if (title !== "通信配置") check(await page.getByText("页面内容待补充。", { exact: true }).count() === 1, `${title}应保留待补充页面`);
 		}
 		await settingsNav.getByRole("link", { name: "通信配置", exact: true }).click();
 		await settingsNav.getByRole("link", { name: "系统状态", exact: true }).click();

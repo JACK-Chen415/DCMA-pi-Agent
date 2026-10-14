@@ -1,10 +1,11 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import { fieldLabels, numericFields, type DashboardField, type DashboardRange, type DashboardTable, type NumericField } from "./database-types.ts";
-import { displayTime, displayValue, displayRawField, codeClassName, displayFieldLabel, fieldUnits } from "./dashboard-view.ts";
+import { fieldLabels, numericFields, type CodeEvent, type DashboardField, type DashboardRange, type DashboardTable, type NumericField } from "./database-types.ts";
+import { displayTime, displaySampleAge, displayValue, displayRawField, codeClassName, displayFieldLabel, fieldUnits } from "./dashboard-view.ts";
 import { useDashboard } from "./useDashboard.ts";
 import { useSampleHistory } from "./useSampleHistory.ts";
 import { Gauge } from "./components/Gauge.tsx";
 import { TrendChart } from "./components/TrendChart.tsx";
+import { eventSamplingRange } from "./code-analysis.ts";
 import { RecentEvents } from "./components/RecentEvents.tsx";
 import { CodeAnalysis } from "./components/CodeAnalysis.tsx";
 import { DateTimeInput } from "./components/DateTimeInput.tsx";
@@ -60,6 +61,7 @@ export function App() {
 	const [range, setRange] = useState<DashboardRange | null>(null);
 	const [samplePage, setSamplePage] = useState(1);
 	const [validation, setValidation] = useState("");
+	const [recordGroup, setRecordGroup] = useState("全部字段");
 	const resetRange = () => { setRange(null); setFrom(""); setTo(""); setSamplePage(1); setValidation(""); };
 	useEffect(() => {
 		const navigate = () => { setView(currentView()); window.scrollTo(0, 0); };
@@ -71,7 +73,7 @@ export function App() {
 	const realtime = useDashboard(table, limit, !browsingHistory && view !== "settings");
 	const samples = useSampleHistory(table, limit, browsingHistory ? range : null, samplePage);
 	const { data, loading, error, refresh } = browsingHistory ? samples : realtime;
-	const update = browsingHistory ? !range ? "请选择时间范围" : loading ? "正在查询历史采样" : error ? "历史采样查询失败" : "历史采样 · 手动刷新" : realtime.update;
+	const update = browsingHistory ? !range ? "请选择时间范围" : loading ? "正在查询历史采样" : error ? "历史采样查询失败" : "历史采样 · 手动刷新" : table === "real_data" ? realtime.error ? "历史记录读取失败" : !realtime.data ? "等待历史记录读取" : !realtime.data.latest ? "暂无历史记录" : "历史记录 · 定期检查" : realtime.update;
 	const pages = Math.max(1, Math.ceil((samples.data?.total ?? 0) / limit));
 	const latest = data?.latest;
 	const selectedSource = data?.sources.find((source) => source.table === table);
@@ -79,7 +81,15 @@ export function App() {
 	const sourceLabel = table === "real_data" ? "历史真实采集" : "模拟数据";
 	const page = views.find((item) => item.id === view)!;
 	const chartFields: NumericField[] = metric === "speed" ? ["speed_setpoint", "speed_actual"] : metric === "torque" ? ["torque_setpoint", "torque_actual"] : [metric];
-	const windowCount = browsingHistory ? samples.data ? `当前页 ${samples.data.returned} 条记录 · 共 ${samples.data.total} 条 · 曲线仅展示当前页` : loading ? "正在读取历史采样…" : "尚未获取查询结果" : `已返回 ${data?.returned ?? 0} 条记录，${data?.samples.length ?? 0} 条有效时间采样${data?.hasMore ? " · 仅展示最近窗口" : ""}${data?.truncated ? " · 响应已截断" : ""}`;
+	const recordFields: DashboardField[] = recordGroup === "全部字段" ? fields : [...new Set<DashboardField>(["id", "timestamp", ...(parameterGroups.find((group) => group.title === recordGroup)?.fields ?? [])])];
+	const viewEvent = (event: CodeEvent) => {
+		const next = eventSamplingRange(event);
+		if (!next) return;
+		const localInput = (value: string) => new Date(Date.parse(value) + 8 * 3600000).toISOString().slice(0, 19);
+		setFrom(localInput(next.from)); setTo(localInput(next.to)); setRange(next); setSamplePage(1); setValidation(""); setMetric("speed");
+		window.location.hash = "query";
+	};
+	const windowCount = browsingHistory ? samples.data ? `当前页 ${samples.data.returned} 条记录 · 共 ${samples.data.total} 条 · 曲线仅展示当前页` : loading ? "正在读取历史采样…" : "尚未获取查询结果" : !data ? loading ? "正在读取采样…" : "采样尚未读取成功" : `已返回 ${data.returned} 条记录，${data?.samples.length ?? 0} 条有效时间采样${data?.hasMore ? " · 仅展示最近窗口" : ""}${data?.truncated ? " · 响应已截断" : ""}`;
 	const runningCards = (items: DashboardField[]) => items.map((field) => {
 		const numeric = numericFields.includes(field as NumericField);
 		return <div className="panel-card running-card" key={field}><span>{displayFieldLabel(field)}</span><strong className={codeClassName(field, latest?.raw[field])}>{numeric ? displayValue(latest?.values[field as NumericField]) : displayRawField(field, latest?.raw[field])}</strong></div>;
@@ -89,6 +99,7 @@ export function App() {
 			<aside className="sidebar">
 				<div className="brand"><img src="/assets/logo.png" alt="" /><div><strong>DCMA</strong><span>电机与变频器监控</span></div></div>
 				<p className="sidebar-caption">监控工作台</p>
+				<select className="mobile-nav" aria-label="切换监控页面" value={view} onChange={(event) => { window.location.hash = event.target.value; }}>{views.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select>
 				<nav className="sidebar-nav" aria-label="监控页面">{views.map((item) => <a key={item.id} href={`#${item.id}`} aria-current={view === item.id ? "page" : undefined}><NavIcon path={item.icon} /><span>{item.title}</span>{view === item.id && <i aria-hidden="true" />}</a>)}</nav>
 				{view !== "settings" && <div className="device-controls">
 					<p className="sidebar-caption">当前监控设备</p>
@@ -97,14 +108,10 @@ export function App() {
 					<label className="sidebar-label" htmlFor="source">数据来源</label>
 					<select id="source" value={motor === 1 && history ? "history" : "simulation"} disabled={motor !== 1} onChange={(event) => { resetRange(); setHistory(event.target.value === "history"); }}><option value="simulation">模拟数据</option>{motor === 1 && <option value="history">历史真实采集</option>}</select>
 				</div>}
-				<div className="sidebar-footer"><span className={`connection ${view === "settings" ? "" : error ? "failed" : data ? "connected" : ""}`} />{view === "settings" ? "系统配置 · 本机保存" : error ? "接口查询失败" : data ? "数据库查询成功" : browsingHistory && !range ? "等待历史查询" : "正在连接接口"}</div>
+				<div className="sidebar-footer"><span className={`connection ${view === "settings" ? "" : error ? "failed" : data ? "connected" : ""}`} />{view === "settings" ? "系统配置" : error ? "接口查询失败" : data ? "数据库查询成功" : browsingHistory && !range ? "等待历史查询" : "正在连接接口"}</div>
 			</aside>
 			<main className="dashboard-main">
 				<header className="page-header"><div><p className="eyebrow">电机监控 / {page.title}</p><h1>{page.title}</h1></div>{view !== "settings" && <div className="header-actions"><label>{browsingHistory ? "每页条数" : "采样条数"} <select aria-label={browsingHistory ? "每页条数" : "采样条数"} value={limit} onChange={(event) => { setLimit(Number(event.target.value) as 50 | 100 | 200); setSamplePage(1); }}>{[50, 100, 200].map((value) => <option key={value} value={value}>{value} 条</option>)}</select></label><button className="refresh-button" aria-busy={loading} onClick={refresh} disabled={loading || (browsingHistory && !range)}>{loading ? "正在查询…" : browsingHistory ? "刷新查询" : "刷新数据"}</button></div>}</header>
-				{view !== "settings" && <>
-				<section className="panel-card device-detail" aria-label="当前设备详情"><div className="detail-heading"><div><p className="eyebrow">当前设备{browsingHistory ? " · 历史采样" : ""}</p><h2>{latest ? displayValue(latest.raw.device_name) : `G120 电机 ${motor}`}</h2><p className="muted">变频器：{displayValue(latest?.raw.inverter_name)}</p></div><span className="source-badge">{sourceLabel}</span></div><div className="time-grid"><div><span>{browsingHistory ? "当前页最新采集（北京时间）" : "最后采集（北京时间）"}</span><strong>{displayTime(latest?.acquiredAt)}</strong></div><div><span>入库时间（北京时间）</span><strong>{displayTime(latest?.ingestedAt)}</strong></div><div><span>上次查询成功</span><strong>{displayTime(data?.queriedAt)}</strong></div><div><span>{browsingHistory ? "查询状态" : "采集更新状态"}</span><strong>{update}</strong></div></div></section>
-				<div aria-live="polite">{error && <p className="notice error">{data ? "刷新失败，以下保留上次成功结果。" : "当前选择查询失败。"}{error}</p>}{!loading && data && !latest && <p className="notice">{browsingHistory ? "所选时间段暂无采样记录。" : selectedSource?.message || "当前来源暂无采样记录。"}</p>}{warnings.map((warning) => <p className="notice" key={warning}>{warning}</p>)}</div>
-				</>}
 				{browsingHistory && <section className="panel-card" aria-label="采样时间查询">
 					<div className="section-heading"><h2>查询时间范围</h2><span className="group-count">北京时间 · 手动查询</span></div>
 					<form className="code-filters" onSubmit={(event) => {
@@ -123,8 +130,12 @@ export function App() {
 					<div aria-live="polite">{validation && <p className="notice error">{validation}</p>}</div>
 					{range ? <><p className="muted small">查询范围：{displayTime(range.from, false, true)} ～ {displayTime(range.to, false, true)}（北京时间，包含起止时刻）</p><div className="event-pagination"><button className="code-reset" disabled={loading || samplePage <= 1} onClick={() => setSamplePage(samplePage - 1)}>上一页</button><span>第 {samplePage} / {Math.max(samplePage, pages)} 页 · 共 {samples.data?.total ?? "—"} 条</span><button className="code-reset" disabled={loading || !samples.data || samplePage >= pages} onClick={() => setSamplePage(samplePage + 1)}>下一页</button></div></> : <p className="muted">选择起止时间后查询历史采样，结果按采集时间从新到旧分页，趋势图展示当前页记录。</p>}
 				</section>}
+				{view !== "settings" && <>
+				<section className="panel-card device-detail" aria-label="当前设备详情"><div className="detail-heading"><div><p className="eyebrow">当前设备{browsingHistory ? " · 历史采样" : ""}</p><h2>{latest ? displayValue(latest.raw.device_name) : `G120 电机 ${motor}`}</h2><p className="muted">变频器：{displayValue(latest?.raw.inverter_name)}</p><p className="source-context">{table === "real_data" ? "历史记录 · 非当前工况" : "模拟采样 · 功能验证"}</p></div><span className="source-badge">{sourceLabel}</span></div>{(!browsingHistory || range) && <div className="time-grid"><div><span>{browsingHistory ? "当前页最新采集（北京时间）" : "最后采集（北京时间）"}</span><strong>{displayTime(latest?.acquiredAt)}</strong><small className="sample-age">查询时距采集：{displaySampleAge(latest?.acquiredAt, data?.queriedAt)}</small></div><div><span>{browsingHistory ? "查询状态" : table === "real_data" ? "历史记录读取状态" : "采集更新状态"}</span><strong>{update}</strong></div><details className="secondary-times"><summary>更多时间信息</summary><div><span>入库时间（北京时间）</span><strong>{displayTime(latest?.ingestedAt)}</strong></div><div><span>上次查询成功</span><strong>{displayTime(data?.queriedAt)}</strong></div></details></div>}</section>
+				<div aria-live="polite">{error && <p className="notice error">{data ? "刷新失败，以下保留上次成功结果。" : "当前选择查询失败。"}{error}</p>}{!loading && data && !latest && <p className="notice">{browsingHistory ? "所选时间段暂无采样记录。" : selectedSource?.message || "当前来源暂无采样记录。"}</p>}{warnings.map((warning) => <p className="notice" key={warning}>{warning}</p>)}</div>
+				</>}
 				{view === "overview" && <>
-					<section className="panel-card overview-intro"><div className="overview-copy"><div><p className="eyebrow">设备档案</p><h2>G120 电机 {motor}</h2><p className="muted">查看这台电机与变频器的读数、趋势和采样记录。</p></div><a className="text-link" href="#realtime">查看采样趋势 →</a></div><figure className="equipment-figure"><img className="equipment-illustration" src="/assets/illustrations/motor-drive.svg" alt="电机与变频器连接关系的示意图" width="420" height="200" decoding="async" /><figcaption>电机与变频器 · 驱动链示意</figcaption></figure></section>
+					<section className="panel-card overview-intro"><div className="overview-copy"><div><p className="eyebrow">设备与来源</p><h2>G120 电机 {motor}</h2><p className="muted">查看这台电机与变频器的读数、趋势和采样记录。</p></div><a className="text-link" href="#realtime">查看采样趋势 →</a></div><figure className="equipment-figure"><img className="equipment-illustration" src="/assets/illustrations/motor-drive.svg" alt="电机与变频器连接关系的示意图" width="420" height="200" decoding="async" /><figcaption>电机与变频器 · 驱动链示意</figcaption></figure></section>
 					<section aria-label="运行信息" className="running-grid">{runningCards(runningFields)}</section>
 					<section className="panel-card" aria-label="完整参数">
 						<div className="section-heading"><h2>完整参数</h2><a className="text-link" href="#records">查看采样明细 →</a></div>
@@ -141,15 +152,15 @@ export function App() {
 						<p className="muted small window-count">{windowCount}</p>
 					</section>
 					{!browsingHistory && <><section aria-label="六项采样仪表" className="gauge-grid">{gaugeFields.map((field) => <Gauge key={field} label={fieldLabels[field]} unit={fieldUnits[field]!} value={latest?.values[field] ?? null} range={gaugeRanges[field]} samples={data?.samples.map((sample) => sample.values[field]) ?? []} />)}</section>
-					<section aria-label="运行信息" className="running-grid">{runningCards(runningFields)}</section><RecentEvents table={table} records={data?.records ?? []} loading={loading} /></>}
+					<section aria-label="运行信息" className="running-grid">{runningCards(runningFields)}</section><RecentEvents table={table} records={data?.records ?? []} loading={loading} onViewEvent={viewEvent} /></>}
 				</>}
 				{view === "metrics" && <div className="metric-groups">{metricGroups.map((group) => <section className="panel-card metric-group" key={group.title} aria-label={group.title}><div className="section-heading"><div className="metric-group-title"><span className="category-icon"><NavIcon path={group.icon} /></span><h2>{group.title}</h2></div><span className="group-count">{group.fields.length} 项指标</span></div><div className="metric-grid" style={{ "--metric-count": group.fields.length } as CSSProperties}>{group.fields.map((field) => <a className="metric-card" key={field} href="#realtime" onClick={() => setMetric(field)} aria-label={`查看${fieldLabels[field]}趋势`}><span>{displayFieldLabel(field)}</span><strong>{displayValue(latest?.values[field])}</strong><NavIcon path="M7 17 17 7M7 7h10v10" /></a>)}</div></section>)}</div>}
 				{view === "codes" && <>
 					<section aria-label="当前代码" className="running-grid code-grid">{runningCards(codeFields)}</section>
-					<CodeAnalysis key={table} table={table} records={data?.records ?? []} loading={loading} truncated={data?.truncated ?? false} />
+					<CodeAnalysis key={table} table={table} records={data?.records ?? []} loading={loading} truncated={data?.truncated ?? false} onViewEvent={viewEvent} />
 				</>}
-				{(view === "records" || (browsingHistory && range)) && <section className="panel-card" aria-label="原始采样明细"><div className="section-heading"><div><h2>原始采样记录</h2></div><span className="group-count">{browsingHistory ? `当前页 · ${limit} 条/页` : `最近 ${limit} 条`}</span></div><details open><summary>采样明细 · {data?.returned ?? 0} 条原始记录</summary><div className="table-scroll"><table><thead><tr>{fields.map((field) => <th key={field}>{displayFieldLabel(field)}</th>)}</tr></thead><tbody>{data?.records.map((record) => <tr key={record.id}>{fields.map((field) => <td key={field} className={codeClassName(field, record.raw[field])}>{displayRawField(field, record.raw[field])}</td>)}</tr>)}</tbody></table></div></details>{!data?.records.length && <p className="empty-state">{loading ? "正在读取采样记录…" : (browsingHistory ? "所选时间段暂无采样记录" : "当前来源暂无采样记录")}</p>}<p className="muted small window-count">{windowCount}</p></section>}
-				{view === "settings" && <SystemConfig />}
+				{(view === "records" || (browsingHistory && range)) && <section className="panel-card" aria-label="原始采样明细"><div className="section-heading"><div><h2>原始采样记录</h2></div><span className="group-count">{browsingHistory ? `当前页 · ${limit} 条/页` : `最近 ${limit} 条`}</span></div><label className="record-group">查看字段 <select aria-label="查看采样字段" value={recordGroup} onChange={(event) => setRecordGroup(event.target.value)}><option>全部字段</option>{parameterGroups.map((group) => <option key={group.title}>{group.title}</option>)}</select></label><details open><summary>采样明细 · {data ? `${data.returned} 条原始记录` : loading ? "正在读取…" : "尚未读取成功"}</summary><div className="table-scroll sample-table"><table><thead><tr>{recordFields.map((field) => <th key={field} className={[field === "id" ? "sticky-id" : field === "timestamp" ? "sticky-time" : "", numericFields.includes(field as NumericField) || field === "id" || codeFields.includes(field) ? "sample-number" : ""].filter(Boolean).join(" ")}>{displayFieldLabel(field)}</th>)}</tr></thead><tbody>{data?.records.map((record) => <tr key={record.id}>{recordFields.map((field) => <td key={field} className={[field === "id" ? "sticky-id" : field === "timestamp" ? "sticky-time" : "", numericFields.includes(field as NumericField) || field === "id" || codeFields.includes(field) ? "sample-number" : "", codeClassName(field, record.raw[field])].filter(Boolean).join(" ")}>{numericFields.includes(field as NumericField) ? displayValue(record.values[field as NumericField], 2) : displayRawField(field, record.raw[field])}</td>)}</tr>)}</tbody></table></div></details>{!data?.records.length && <p className="empty-state">{loading ? "正在读取采样记录…" : (error ? "采样尚未读取成功" : browsingHistory ? "所选时间段暂无采样记录" : "当前来源暂无采样记录")}</p>}<p className="muted small window-count">{windowCount}</p></section>}
+				{view === "settings" && <SystemConfig sources={realtime.data?.sources ?? []} />}
 			</main>
 		</div>
 	);

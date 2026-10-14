@@ -30,6 +30,8 @@ async (page) => {
 				check(JSON.stringify(await gauge.locator("svg text").allTextContents()) === JSON.stringify([text((min + max) / 2), text(min), text(max)]), `${mode}/${label}量程随采样变化`);
 				check((await gauge.locator("svg title").textContent()).includes("量程"), `${label}无障碍描述缺少量程`);
 				check(await gauge.locator(".gauge-value").innerText() === (mode === "missing" ? "—" : text(value(min, max))), `${mode}/${label}原始读数被裁剪`);
+				check(await gauge.locator(".gauge-display-note").count() === (mode === "below" || mode === "above" ? 1 : 0), `${mode}/${label}显示量程提示错误`);
+				if (mode === "below" || mode === "above") check(await gauge.locator(".gauge-display-note").innerText() === (mode === "below" ? "低于显示量程" : "高于显示量程"), `${mode}/${label}超量程方向错误`);
 				const fill = gauge.locator('path[stroke="#2563eb"]');
 				if (mode === "missing") check(await fill.count() === 0 && await gauge.locator('line[stroke="#1d4ed8"]').count() === 0, `${label}缺失时仍显示指针`);
 				else check(await fill.getAttribute("stroke-dasharray") === `${mode === "middle" ? .5 : mode === "below" ? 0 : 1} 1`, `${mode}/${label}指针位置错误`);
@@ -37,6 +39,7 @@ async (page) => {
 			const torque = page.locator(".gauge-card").filter({ has: page.getByRole("heading", { name: "实际转矩（N·m）", exact: true }) });
 			check(JSON.stringify(await torque.locator("svg text").allTextContents()) === JSON.stringify(["5", "-10", "20"]), "实际转矩未保留原有采样范围");
 			check((await torque.locator("svg title").textContent()).includes("采样范围"), "实际转矩无障碍描述缺少采样范围");
+			check(await torque.locator(".gauge-display-note").innerText() === "动态刻度", "转矩动态刻度未说明");
 			check(await page.locator(".gauge-range").count() === 0, "仪表底部范围文字未移除");
 			check(JSON.stringify(await page.locator(".gauge-card h3").allTextContents()) === JSON.stringify(["实际转速（rpm）", "实际电流（A）", "实际转矩（N·m）", "直流母线电压（V）", "变频器温度（°C）", "电机温度（°C）"]), "仪表单位未统一放在标题括号中");
 			check(await page.locator(".gauge-card p, .gauge-unit").count() === 0, "读数下方仍显示单位或范围文字");

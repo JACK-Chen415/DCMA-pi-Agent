@@ -1,8 +1,28 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { displayTime, displayValue, displayRaw, displayRawField, codeClassName, displayFieldLabel, fieldUnits, sampleIdentity, sampleRange, linePath } from "../src/dashboard-view.ts";
+import { displayTime, displayValue, displayRaw, displayRawField, codeClassName, displayFieldLabel, fieldUnits, sampleIdentity, displaySampleAge, sampleRange, linePath } from "../src/dashboard-view.ts";
 import { dashboardExample } from "../../database/test/dashboard-example.ts";
-import { displaySamplingSpan, recentCodeHistory } from "../src/code-analysis.ts";
+import { displaySamplingSpan, eventSamplingRange, recentCodeHistory } from "../src/code-analysis.ts";
+import type { CodeEvent } from "../src/database-types.ts";
+
+test("样本年龄采用成功查询时刻，不混同刷新成功、采集更新或设备故障", () => {
+	const start = "2026-10-14T07:00:00.000Z";
+	for (const [milliseconds, expected] of [[0, "不足1秒"], [999, "不足1秒"], [4000, "4秒"], [61000, "1分 1秒"], [3660000, "1小时 1分"], [90000000, "1天 1小时"]] as const) {
+		assert.equal(displaySampleAge(start, new Date(Date.parse(start) + milliseconds).toISOString()), expected);
+	}
+	assert.equal(displaySampleAge(start, "2026-10-14T06:59:59.000Z"), "采集时间晚于查询时间");
+	assert.equal(displaySampleAge(null, start), "—");
+	assert.equal(displaySampleAge(start, "invalid"), "—");
+});
+
+test("事件回看保留已观察区间和前后5分钟，未结束不使用当前时间", () => {
+	const event: CodeEvent = { id: "fault/1", field: "fault_code", code: "F01030", startedAt: "2026-01-14T10:20:37.005Z", endedAt: null, lastSeenAt: "2026-01-14T10:27:24.814Z", samples: 2, ending: null, startUncertain: true, hasMissingSamples: true };
+	assert.deepEqual(eventSamplingRange(event), { from: "2026-01-14T10:15:37.000Z", to: "2026-01-14T10:32:25.000Z" });
+	assert.deepEqual(eventSamplingRange({ ...event, endedAt: "2026-01-14T10:28:00.000Z" }), { from: "2026-01-14T10:15:37.000Z", to: "2026-01-14T10:33:00.000Z" });
+	assert.deepEqual(eventSamplingRange({ ...event, lastSeenAt: event.startedAt }), { from: "2026-01-14T10:15:37.000Z", to: "2026-01-14T10:25:38.000Z" });
+	assert.equal(eventSamplingRange({ ...event, startedAt: "invalid" }), null);
+	assert.equal(eventSamplingRange({ ...event, lastSeenAt: "2026-01-14T10:00:00Z" }), null);
+});
 
 test("展板显示保留0、负数、原始代码并明确缺失值和北京时间", () => {
 	assert.equal(displayValue(0), "0");

@@ -6,6 +6,10 @@ async (page) => {
 		await page.goto("http://127.0.0.1:3000");
 		await page.locator(".sidebar-footer").filter({ hasText: "数据库查询成功" }).waitFor();
 		const nav = page.getByRole("navigation", { name: "监控页面" });
+		const navigate = async (name) => {
+			if (await page.locator(".mobile-nav").isVisible()) await page.getByLabel("切换监控页面").selectOption({ label: name });
+			else await nav.getByRole("link", { name, exact: true }).click();
+		};
 		const pages = ["设备概览", "实时数据", "运行指标", "故障与报警", "采样明细"];
 		check(await nav.getByRole("link").count() === 7, "侧边栏菜单不是七项");
 		for (const width of [1366, 1920]) {
@@ -18,9 +22,9 @@ async (page) => {
 		for (const width of [375, 768, 1366, 1920]) {
 			await page.setViewportSize({ width, height: 900 });
 			for (const name of pages) {
-				await nav.getByRole("link", { name, exact: true }).click();
+				await navigate(name);
 				await page.getByRole("heading", { name, exact: true, level: 1 }).waitFor();
-				check(await nav.getByRole("link", { name, exact: true }).getAttribute("aria-current") === "page", `${name}菜单未选中`);
+				check(await page.locator(".sidebar-nav a").filter({ hasText: name }).getAttribute("aria-current") === "page", `${name}菜单未选中`);
 				check(await page.locator("main").getByText("状态码", { exact: true }).count() === 0, `${name}仍显示status字段`);
 				check(!(await page.locator("main").innerText()).includes("运行时间"), `${name}仍显示系统运行时间`);
 				const content = await page.locator("body").innerText();
@@ -94,7 +98,7 @@ async (page) => {
 		await source.selectOption("history");
 		await page.getByText("2026/01/14 18:27:24", { exact: true }).first().waitFor();
 		await page.getByRole("button", { name: "刷新数据", exact: true }).click();
-		await page.getByText("本次无新采样", { exact: true }).waitFor();
+		await page.getByText("历史记录 · 定期检查", { exact: true }).waitFor();
 		check((await page.locator(".device-detail").innerText()).includes("历史真实采集"), "历史来源标识错误");
 		await device.selectOption("2");
 		await page.getByRole("heading", { name: "G120电机2", exact: true }).waitFor();
@@ -120,12 +124,13 @@ async (page) => {
 		await page.screenshot({ path: "output/playwright/codes.png", fullPage: true });
 		await nav.getByRole("link", { name: "采样明细", exact: true }).click();
 		await page.getByRole("region", { name: "原始采样明细" }).waitFor();
-		check(await page.locator("details").getAttribute("open") !== null, "明细未默认展开");
-		await page.locator("summary").focus();
+		const sampleDetails = page.getByRole("region", { name: "原始采样明细", exact: true }).locator("details");
+		check(await sampleDetails.getAttribute("open") !== null, "明细未默认展开");
+		await sampleDetails.locator("summary").focus();
 		await page.keyboard.press("Enter");
-		check(await page.locator("details").getAttribute("open") === null, "采样明细键盘未收起");
+		check(await sampleDetails.getAttribute("open") === null, "采样明细键盘未收起");
 		await page.keyboard.press("Enter");
-		check(await page.locator("details").getAttribute("open") !== null, "采样明细键盘未展开");
+		check(await sampleDetails.getAttribute("open") !== null, "采样明细键盘未展开");
 		check(await page.locator("table th").count() === 29, "采样明细隐藏status和运行时间后字段数量错误");
 		check((await page.locator("table thead").innerText()).includes("实际电流（A）"), "采样明细缺少单位");
 		await page.screenshot({ path: "output/playwright/records.png", fullPage: true });
