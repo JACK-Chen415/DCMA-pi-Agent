@@ -6,15 +6,17 @@ export function DeviceModal({
 	onClose,
 	currentDevice,
 	onSelectDevice,
+	devices,
 }: {
 	onClose: () => void;
 	currentDevice: Device;
 	onSelectDevice: (device: Device) => void;
+	devices?: Device[];
 }) {
 	return (
 		<Modal title="切换目标监测设备" subtitle="各设备拥有独立数据集；切换设备会开启新对话" onClose={onClose}>
 			<div className="space-y-3">
-				{initialDevices.map((device) => (
+				{(devices ?? initialDevices).map((device) => (
 					<button
 						type="button"
 						key={device.id}

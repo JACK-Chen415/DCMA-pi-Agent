@@ -28,6 +28,7 @@ export function RightPanel({
 	disabled,
 	open,
 	onClose,
+	databaseMessage,
 }: {
 	device: Device;
 	metrics: MetricData[];
@@ -43,9 +44,10 @@ export function RightPanel({
 	disabled: boolean;
 	open: boolean;
 	onClose: () => void;
+	databaseMessage?: string;
 }) {
 	const temperature = metrics.find((metric) => metric.id === "temperature")?.value;
-	const alarm = typeof temperature === "number" && temperature > threshold;
+	const alarm = !databaseMessage && typeof temperature === "number" && temperature > threshold;
 	const warning = device.status === "warning" || alarm;
 	return (
 		<aside
@@ -106,7 +108,7 @@ export function RightPanel({
 							<div className="text-[11px] text-slate-500 flex gap-1 items-center">
 								{metric.id === "temperature" ? (
 									<Thermometer className="w-3 h-3" />
-								) : metric.id === "vibration" ? (
+								) : metric.id === "vibration" || metric.id === "voltage" ? (
 									<Activity className="w-3 h-3" />
 								) : metric.id === "current" ? (
 									<Zap className="w-3 h-3" />
@@ -122,24 +124,27 @@ export function RightPanel({
 							<LineChart
 								compact
 								label={metric.label}
-								points={metric.sparkline.map((value, index) => ({ name: String(index), value }))}
+								points={
+									metric.points ?? metric.sparkline.map((value, index) => ({ name: String(index), value }))
+								}
 							/>
 							<p className="text-[10px] text-slate-500 mt-1">较前点 {metric.change}</p>
 						</div>
 					))}
 				</div>
 				<p className="text-[10px] text-slate-400 mt-3">
-					{dataset.samples.length} 个采样点 · 每 {intervalMs / 1000}s 检查服务
+					{dataset.samples.length} 个采样点 · 每 {intervalMs / 1000}s {databaseMessage ? "检查数据" : "检查服务"}
 					<br />
 					检查时间：{checkedAt || "正在连接"}
 				</p>
+				{databaseMessage && <output className="block text-[10px] text-slate-500 mt-1">{databaseMessage}</output>}
 				<div className="flex gap-3 mt-3">
 					<button type="button" onClick={onImport} className="text-xs text-blue-600">
 						导入 CSV / LOG
 					</button>
 					{dataset.imported && (
 						<button type="button" onClick={onRestoreDemo} className="text-xs text-slate-500">
-							恢复示例数据
+							返回数据库数据
 						</button>
 					)}
 				</div>

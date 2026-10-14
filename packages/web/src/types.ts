@@ -5,7 +5,7 @@ export interface Device {
 	type: string;
 	location: string;
 	commissionDate: string;
-	status: "running" | "warning" | "stopped" | "maintenance";
+	status: "running" | "warning" | "stopped" | "maintenance" | "unknown";
 	image: string;
 }
 export type MetricKey = "temperature" | "vibration" | "current" | "speed";
@@ -22,7 +22,7 @@ export interface Dataset {
 	samples: TelemetrySample[];
 }
 export interface MetricData {
-	id: MetricKey;
+	id: MetricKey | "voltage";
 	label: string;
 	value: string | number;
 	unit: string;
@@ -30,11 +30,15 @@ export interface MetricData {
 	trend: "up" | "down" | "flat";
 	accentColor: "blue" | "amber";
 	sparkline: number[];
+	points?: ChartSample[];
 }
 export interface ChartPoint {
 	name: string;
 	value: number;
 	time?: number;
+}
+export interface ChartSample extends Omit<ChartPoint, "value"> {
+	value: number | null;
 }
 export interface ChatMessage {
 	id: string;

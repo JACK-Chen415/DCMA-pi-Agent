@@ -46,6 +46,7 @@ export const statusLabels: Record<Device["status"], string> = {
 	warning: "预警关注",
 	stopped: "已停机",
 	maintenance: "维护中",
+	unknown: "状态未确认",
 };
 export const defaultSettings: AppSettings = {
 	model: "",

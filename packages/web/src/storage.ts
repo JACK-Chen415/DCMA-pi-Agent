@@ -1,3 +1,4 @@
+import { dashboardTables } from "./dashboard-data.ts";
 import { createDemoDatasets, defaultSettings, initialDevices } from "./mockData.ts";
 import { parseTelemetry } from "./telemetry.ts";
 import type { AppSettings, ConversationItem, Dataset } from "./types.ts";
@@ -9,12 +10,13 @@ export interface WorkspaceState {
 	deviceId: string;
 	settings: AppSettings;
 	datasets: Record<string, Dataset>;
+	offlineDeviceId?: string;
 }
 export function loadWorkspace(): WorkspaceState {
 	const initial: WorkspaceState = {
 		conversations: [],
 		activeId: null,
-		deviceId: initialDevices[0].id,
+		deviceId: dashboardTables[0],
 		settings: defaultSettings,
 		datasets: createDemoDatasets(),
 	};
@@ -39,7 +41,7 @@ export function loadWorkspace(): WorkspaceState {
 						: 75,
 			};
 		}
-		if (typeof value.deviceId === "string" && initialDevices.some((device) => device.id === value.deviceId))
+		if (typeof value.deviceId === "string" && dashboardTables.some((table) => table === value.deviceId))
 			initial.deviceId = value.deviceId;
 		if (Array.isArray(value.conversations)) {
 			initial.conversations = value.conversations.slice(0, 50).flatMap((entry: unknown) => {
@@ -96,8 +98,8 @@ export function loadWorkspace(): WorkspaceState {
 		)
 			initial.activeId = value.activeId;
 		if (value.datasets && typeof value.datasets === "object") {
-			for (const device of initialDevices) {
-				const savedData: unknown = (value.datasets as Record<string, unknown>)[device.id];
+			for (const deviceId of [...initialDevices.map((device) => device.id), ...dashboardTables]) {
+				const savedData: unknown = (value.datasets as Record<string, unknown>)[deviceId];
 				if (!savedData || typeof savedData !== "object") continue;
 				const dataset = savedData as Record<string, unknown>;
 				if (!Array.isArray(dataset.samples) || !dataset.imported || typeof dataset.source !== "string") continue;
@@ -106,12 +108,18 @@ export function loadWorkspace(): WorkspaceState {
 						dataset.samples.map((sample: unknown) => JSON.stringify(sample)).join("\n"),
 						"历史导入数据",
 					);
-					initial.datasets[device.id] = { ...restored, source: dataset.source };
+					initial.datasets[deviceId] = { ...restored, source: dataset.source };
 				} catch {
 					/* A damaged dataset must not prevent loading other conversations. */
 				}
 			}
 		}
+		if (
+			typeof value.offlineDeviceId === "string" &&
+			dashboardTables.some((table) => table === value.offlineDeviceId) &&
+			initial.datasets[value.offlineDeviceId]?.imported
+		)
+			initial.offlineDeviceId = value.offlineDeviceId;
 	} catch {
 		/* Start with a usable workspace if storage is unavailable or corrupted. */
 	}

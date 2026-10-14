@@ -10,8 +10,8 @@ import { SettingsModal } from "./components/SettingsModal";
 import { Sidebar } from "./components/Sidebar";
 import { TelemetryModal } from "./components/TelemetryModal";
 import { WelcomeView } from "./components/WelcomeView";
+import { dashboardTables, databaseDataset, databaseDevice, databaseMetrics, useDashboard } from "./dashboard-data.ts";
 import { downloadText } from "./download.ts";
-import { createDemoDatasets, initialDevices } from "./mockData.ts";
 import { loadWorkspace, storageKey } from "./storage.ts";
 import { getMetrics, parseTelemetry, telemetryCsv } from "./telemetry.ts";
 import type { AppSettings, BackendStatus, ChatMessage } from "./types.ts";
@@ -19,7 +19,6 @@ import type { AppSettings, BackendStatus, ChatMessage } from "./types.ts";
 export function App() {
 	const [workspace, setWorkspace] = useState(loadWorkspace);
 	const [backend, setBackend] = useState<BackendStatus>({ connected: false, models: [], message: "正在连接本地服务" });
-	const [checkedAt, setCheckedAt] = useState("");
 	const [modal, setModal] = useState<"device" | "telemetry" | "settings" | "import" | null>(null);
 	const [sidebarOpen, setSidebarOpen] = useState(false);
 	const [panelOpen, setPanelOpen] = useState(false);
@@ -33,8 +32,21 @@ export function App() {
 	const [busy, setBusy] = useState(false);
 	const request = useRef<AbortController | null>(null);
 	const fileInput = useRef<HTMLInputElement>(null);
-	const device = initialDevices.find((item) => item.id === workspace.deviceId) ?? initialDevices[0];
-	const dataset = workspace.datasets[device.id];
+	const table = dashboardTables.find((item) => item === workspace.deviceId) ?? dashboardTables[0];
+	const live = useDashboard(table, 100);
+	const devices = dashboardTables.map((name) =>
+		databaseDevice(
+			name,
+			live.data?.sources.find((source) => source.table === name),
+		),
+	);
+	const device = devices.find((item) => item.id === table)!;
+	const offline = workspace.offlineDeviceId === table && !!workspace.datasets[table]?.imported;
+	const dataset = offline ? workspace.datasets[table] : databaseDataset(table, live.data);
+	const dataMessage = live.error
+		? `${live.data ? "刷新失败，保留上次成功数据。" : "未取得数据库数据。"}${live.error}`
+		: live.data?.sources.find((source) => source.table === table)?.message || live.update;
+	const checkedAt = live.data ? new Date(live.data.queriedAt).toLocaleString("zh-CN") : "尚未查询成功";
 	const conversation = workspace.conversations.find((item) => item.id === workspace.activeId);
 	const settings = workspace.settings;
 
@@ -59,7 +71,6 @@ export function App() {
 				const status = await getBackendStatus(AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]));
 				if (!controller.signal.aborted) {
 					setBackend(status);
-					setCheckedAt(new Date().toLocaleTimeString("zh-CN"));
 				}
 			} catch {
 				if (!controller.signal.aborted)
@@ -168,13 +179,19 @@ export function App() {
 				),
 			}));
 		try {
-			const databasePreferred = settings.databaseEnabled !== false;
+			const databasePreferred = !offline || settings.databaseEnabled !== false;
 			await streamChat(
 				{
 					model: settings.model,
 					text: text.trim(),
 					context: databasePreferred
-						? "设备台账及指标映射尚未确认，请读取数据库目录和实际记录。侧栏显示的数据不代表数据库。"
+						? JSON.stringify({
+								schema: "dcma",
+								table,
+								device: device.name,
+								source: table === "real_data" ? "历史真实采集" : "模拟数据",
+								note: "当前设备与展板使用同一数据源，请通过数据库工具重新查询；状态码未解码，不得推断运行状态。位置和投运日期未提供。",
+							})
 						: JSON.stringify({
 								device,
 								source: dataset.source,
@@ -183,9 +200,10 @@ export function App() {
 								units: { temperature: "℃", vibration: "mm/s", current: "A", speed: "rpm" },
 								totalSamples: dataset.samples.length,
 								samples: dataset.samples.slice(-200),
-								note: "仅提供最新最多200个采样点，不代表全量数据。设备台账为示例；示例测量值不能作为现场诊断依据，导入文件属于离线数据。",
+								note: "导入文件属于离线数据，仅提供最新最多200个采样点，不代表数据库当前读数或全量统计。",
 							}),
 					database: databasePreferred,
+					table,
 					history: (conversation?.messages ?? [])
 						.filter((message) => message.status === "done")
 						.slice(-20)
@@ -221,7 +239,11 @@ export function App() {
 			if (file.size > 2 * 1024 * 1024) throw new Error("文件不得超过 2 MB。");
 			if (!/\.(csv|log|jsonl)$/iu.test(file.name)) throw new Error("请选择 CSV、LOG 或 JSONL 文件。");
 			const data = parseTelemetry(await file.text(), file.name);
-			setWorkspace((state) => ({ ...state, datasets: { ...state.datasets, [targetDevice]: data } }));
+			setWorkspace((state) => ({
+				...state,
+				offlineDeviceId: targetDevice,
+				datasets: { ...state.datasets, [targetDevice]: data },
+			}));
 			setModal(null);
 			setNotice(`已为${device.name}导入 ${data.samples.length} 个采样点`);
 		} catch (error) {
@@ -300,7 +322,7 @@ export function App() {
 					<span>
 						{device.name} · {dataset.source}
 					</span>
-					{settings.databaseEnabled !== false && <span>Agent 优先查询 MySQL；侧栏为独立示例/导入数据</span>}
+					<span>{offline ? "当前为离线导入数据；展板使用 MySQL" : "Agent 与展板使用同一 MySQL 数据来源"}</span>
 					{!backend.models.length && <span className="text-amber-700">模型尚未授权，请打开设置</span>}
 				</div>
 				{(notice || storageError) && (
@@ -329,21 +351,28 @@ export function App() {
 			</main>
 			<RightPanel
 				device={device}
-				metrics={getMetrics(dataset.samples, settings.alarmThreshold)}
+				metrics={offline ? getMetrics(dataset.samples, settings.alarmThreshold) : databaseMetrics(live.data)}
 				dataset={dataset}
 				threshold={settings.alarmThreshold}
 				checkedAt={checkedAt}
-				intervalMs={settings.telemetryIntervalMs}
+				intervalMs={3000}
+				databaseMessage={offline ? undefined : dataMessage}
 				onSwitchDevice={() => setModal("device")}
-				onViewMoreTelemetry={() => setModal("telemetry")}
+				onViewMoreTelemetry={() => {
+					stop();
+					try {
+						localStorage.setItem(storageKey, JSON.stringify(workspace));
+					} catch {
+						setNotice("会话尚未保存，请先导出会话后再打开展板。");
+						return;
+					}
+					window.location.assign(`/dashboard/?table=${table}#realtime`);
+				}}
 				onQuickAction={quickAction}
 				onImport={openImport}
 				onRestoreDemo={() => {
-					setWorkspace((state) => ({
-						...state,
-						datasets: { ...state.datasets, [device.id]: createDemoDatasets()[device.id] },
-					}));
-					setNotice("已切换为示例数据；原始上传文件不会被修改");
+					setWorkspace((state) => ({ ...state, offlineDeviceId: undefined }));
+					setNotice("已返回数据库数据；原始上传文件不会被修改");
 				}}
 				disabled={busy}
 				open={panelOpen}
@@ -352,6 +381,7 @@ export function App() {
 			{modal === "device" && (
 				<DeviceModal
 					currentDevice={device}
+					devices={devices}
 					onClose={() => setModal(null)}
 					onSelectDevice={(selected) => {
 						stop();
