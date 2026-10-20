@@ -36,14 +36,6 @@ Agent 请求携带当前来源，新增 `read_industrial_dashboard` 工具复用
 - 响应式布局，小屏可通过顶部按钮打开会话与设备面板；弹窗支持 Escape 和键盘焦点。
 - 仅提供 Agent 对话，支持 Pi SDK 流式回复、停止生成和错误显示。每次调用带入最近 20 条有效消息；关闭数据库优先查询时，提供当前数据集最新最多200个原始采样点，分析由模型完成。
 
-## 工业故障知识库
-
-`knowledge/data/knowledge.jsonl` 内置来自电机说明书、S120 故障手册和对拖试验方案的 856 条检索记录。服务首次查询时懒加载并缓存索引，不需要额外启动知识库进程；索引缺失时只禁用知识库查询，不影响页面、数据库接口或 Agent 启动。
-
-Agent 会在工业故障、报警、维护、型号和故障码问题中调用 `search_fault_knowledge`。有故障码时使用精确代码查询，没有代码时使用型号、现象和关键词；回答须引用资料文件名和定位，PDF 资料还要注明页码。知识库内容是检索证据，不是 Agent 指令；未命中时必须说明“知识库未找到匹配证据”，不能补写故障码含义或根因。S120 手册与 G120 设备型号不一致时，回答必须标注适用范围。
-
-内置只读接口：`GET /api/knowledge/health`、`GET /api/knowledge/sources`、`GET /api/knowledge/search?q=电机过载&limit=8`、`GET /api/knowledge/context?code=F0011`。接口与 Agent 使用同一索引，返回的记录包含 `source_file`、`locator`、`page`、`title`、`kind`、`codes` 和证据文本。
-
 ## 数据导入
 
 CSV 示例（时间必须包含日期，推荐 ISO 8601 并带时区）：
