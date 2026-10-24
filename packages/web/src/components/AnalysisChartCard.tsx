@@ -1,44 +1,11 @@
-import { BarChart, LineChart, ScatterChart } from "echarts/charts";
-import {
-	AriaComponent,
-	DataZoomComponent,
-	GraphicComponent,
-	GridComponent,
-	LegendComponent,
-	MarkLineComponent,
-	TitleComponent,
-	TooltipComponent,
-} from "echarts/components";
-import { type EChartsType, init, use } from "echarts/core";
-import { SVGRenderer } from "echarts/renderers";
+import type { EChartsType } from "echarts/core";
 import { ChartNoAxesCombined, Download, Expand, RefreshCw, Table2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { type ChartArtifact, type ChartReference, validateChartArtifact } from "../../chart-contracts.ts";
 import { chartHeight, chartRequery, chartTime, chartZoomViewport, createChartOptions } from "../chart-options.ts";
-
-use([
-	LineChart,
-	ScatterChart,
-	BarChart,
-	GridComponent,
-	TooltipComponent,
-	LegendComponent,
-	DataZoomComponent,
-	AriaComponent,
-	TitleComponent,
-	GraphicComponent,
-	MarkLineComponent,
-	SVGRenderer,
-]);
-
-function saveBlob(blob: Blob, name: string): void {
-	const url = URL.createObjectURL(blob);
-	const link = document.createElement("a");
-	link.href = url;
-	link.download = name;
-	link.click();
-	setTimeout(() => URL.revokeObjectURL(url), 2000);
-}
+import { init } from "../chart-render.ts";
+import { saveExportFile } from "../download.ts";
+import { timeToSeconds } from "../time-display.ts";
 export function AnalysisChartCard({
 	reference,
 	onRequery,
@@ -55,6 +22,7 @@ export function AnalysisChartCard({
 	const [data, setData] = useState<ChartArtifact | null>(null);
 	const [error, setError] = useState("");
 	const [actionError, setActionError] = useState("");
+	const [savedPath, setSavedPath] = useState("");
 	const [showData, setShowData] = useState(false),
 		[page, setPage] = useState(0),
 		[exporting, setExporting] = useState(false);
@@ -96,13 +64,20 @@ export function AnalysisChartCard({
 			instance.current = null;
 		};
 	}, [visible, data]);
-	const download = async (format: "png" | "svg") => {
-		if (!data || !instance.current || exporting) return;
+	const download = async (format: "png" | "svg" | "csv") => {
+		if (!data || exporting) return;
 		setExporting(true);
 		setActionError("");
+		setSavedPath("");
 		let exported: EChartsType | undefined;
 		try {
-			const zoom = chartZoomViewport(instance.current.getOption().dataZoom);
+			if (format === "csv") {
+				const response = await fetch(`/api/tools/charts/${data.id}.csv`, { signal: AbortSignal.timeout(15000) });
+				if (!response.ok) throw new Error("图表数据不可读取。");
+				setSavedPath(await saveExportFile(`DCMA-${data.kind}-${data.id}.csv`, await response.blob()));
+				return;
+			}
+			const zoom = chartZoomViewport(instance.current?.getOption().dataZoom);
 			const note = `导出当前横轴缩放：${(zoom?.[0]?.start ?? 0).toFixed(1)}%～${(zoom?.[0]?.end ?? 100).toFixed(1)}%；CSV包含完整快照。`;
 			const width = 1000,
 				height = chartHeight(data) + 300;
@@ -111,14 +86,30 @@ export function AnalysisChartCard({
 			if (zoom) exported.setOption({ dataZoom: zoom });
 			const svg = exported.renderToSVGString();
 			if (format === "svg")
-				saveBlob(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }), `DCMA-${data.kind}-${data.id}.svg`);
+				setSavedPath(
+					await saveExportFile(
+						`DCMA-${data.kind}-${data.id}.svg`,
+						new Blob([svg], { type: "image/svg+xml;charset=utf-8" }),
+					),
+				);
 			else {
 				const svgUrl = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
 				try {
 					const picture = new Image();
 					await new Promise<void>((resolve, reject) => {
-						picture.onload = () => resolve();
-						picture.onerror = () => reject(new Error("图片转换失败。"));
+						const timer = setTimeout(() => {
+							picture.onload = null;
+							picture.onerror = null;
+							reject(new Error("图片转换超时，请重试或保存SVG。"));
+						}, 15000);
+						picture.onload = () => {
+							clearTimeout(timer);
+							resolve();
+						};
+						picture.onerror = () => {
+							clearTimeout(timer);
+							reject(new Error("图片转换失败。"));
+						};
 						picture.src = svgUrl;
 					});
 					const canvas = document.createElement("canvas");
@@ -132,7 +123,7 @@ export function AnalysisChartCard({
 					const blob = await new Promise<Blob>((resolve, reject) =>
 						canvas.toBlob((value) => (value ? resolve(value) : reject(new Error("PNG生成失败。"))), "image/png"),
 					);
-					saveBlob(blob, `DCMA-${data.kind}-${data.id}.png`);
+					setSavedPath(await saveExportFile(`DCMA-${data.kind}-${data.id}.png`, blob));
 				} finally {
 					URL.revokeObjectURL(svgUrl);
 				}
@@ -162,13 +153,13 @@ export function AnalysisChartCard({
 			.slice(page * 50, page * 50 + 50)
 			.map((cells, index) => ({ id: `${reference.id}/${page * 50 + index}`, cells })) ?? [];
 	return (
-		<section ref={card} className="analysis-chart-card" aria-label={data?.title ?? "分析图表"}>
+		<section ref={card} className="analysis-chart-card" aria-label={data ? timeToSeconds(data.title) : "分析图表"}>
 			<header className="analysis-chart-heading">
 				<span className="analysis-chart-icon">
 					<ChartNoAxesCombined size={18} />
 				</span>
 				<div>
-					<h3>{data?.title ?? "正在读取图表快照"}</h3>
+					<h3>{data ? timeToSeconds(data.title) : "正在读取图表快照"}</h3>
 					{data && (
 						<p>
 							{data.sources.map((source) => source.device ?? source.table).join(" / ")}
@@ -200,7 +191,7 @@ export function AnalysisChartCard({
 						className="analysis-chart-surface"
 						style={{ height: chartHeight(data) }}
 						role="img"
-						aria-label={`${data.title}，${data.sourceRecords}条来源记录；可打开数据视图阅读数值。`}
+						aria-label={`${timeToSeconds(data.title)}，${data.sourceRecords}条来源记录；可打开数据视图阅读数值。`}
 					/>
 					<div className="analysis-chart-actions">
 						<button type="button" onClick={() => void enlarge()}>
@@ -211,18 +202,18 @@ export function AnalysisChartCard({
 							<Table2 size={14} />
 							数据视图
 						</button>
-						<button type="button" disabled={exporting || !visible} onClick={() => void download("png")}>
+						<button type="button" disabled={exporting} onClick={() => void download("png")}>
 							<Download size={14} />
 							PNG
 						</button>
-						<button type="button" disabled={exporting || !visible} onClick={() => void download("svg")}>
+						<button type="button" disabled={exporting} onClick={() => void download("svg")}>
 							<Download size={14} />
 							SVG
 						</button>
-						<a href={`/api/tools/charts/${data.id}.csv`} download>
+						<button type="button" disabled={exporting} onClick={() => void download("csv")}>
 							<Download size={14} />
 							导出图表数据
-						</a>
+						</button>
 						{onRequery && (
 							<button type="button" disabled={disabled} onClick={requery}>
 								<RefreshCw size={14} />
@@ -230,6 +221,7 @@ export function AnalysisChartCard({
 							</button>
 						)}
 					</div>
+					{savedPath && <output className="block p-3 text-xs text-blue-700 break-all">已保存：{savedPath}</output>}
 					{actionError && (
 						<p role="alert" className="analysis-chart-error">
 							{actionError}

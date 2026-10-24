@@ -14,6 +14,7 @@ import {
 	readDatabaseRows,
 } from "../../../dashboard/database/database.ts";
 import { type ChartReference, type ChartRequest, validateChartReference } from "../chart-contracts.ts";
+import type { EvidenceRecord } from "../interaction-contracts.ts";
 import {
 	analyzeThresholdEvents,
 	assessDeviceState,
@@ -120,10 +121,14 @@ export function createIndustrialServices(directory: string) {
 export type IndustrialServices = ReturnType<typeof createIndustrialServices>;
 
 /** Each chat request owns its evidence and drawing sources. */
-export function createIndustrialTools(selectedTable: DashboardTable, services: IndustrialServices) {
+export function createIndustrialTools(
+	selectedTable: DashboardTable,
+	services: IndustrialServices,
+	saveEvidence?: (record: EvidenceRecord) => Promise<void>,
+) {
 	let remaining = 16;
 	let databaseReads = 0;
-	const deadline = Date.now() + 90000;
+	let toolTimeUsed = 0;
 	const evidence = createEvidenceStore();
 	const windows = new Map<string, Promise<AnalysisWindow>>();
 	const chartSources = new Map<string, ChartSource>();
@@ -216,7 +221,7 @@ export function createIndustrialTools(selectedTable: DashboardTable, services: I
 			executionMode: "sequential",
 			async execute(_id, params, cancellation) {
 				cancellation?.throwIfAborted();
-				if (remaining-- <= 0 || Date.now() >= deadline)
+				if (remaining-- <= 0 || toolTimeUsed >= 90000)
 					return {
 						isError: true,
 						terminate: true,
@@ -232,9 +237,10 @@ export function createIndustrialTools(selectedTable: DashboardTable, services: I
 						],
 						details: { evidenceId: "" },
 					};
+				const startedAt = Date.now();
 				const signal = AbortSignal.any([
 					...(cancellation ? [cancellation] : []),
-					AbortSignal.timeout(Math.max(1, Math.min(30000, deadline - Date.now()))),
+					AbortSignal.timeout(Math.max(1, Math.min(30000, 90000 - toolTimeUsed))),
 				]);
 				try {
 					const result = await run(params, signal);
@@ -242,6 +248,15 @@ export function createIndustrialTools(selectedTable: DashboardTable, services: I
 					if (Buffer.byteLength(JSON.stringify(result)) > 62000)
 						throw new ToolInputError("结果超过62KB，请减少字段、分组或缩小时间范围；未返回部分统计。");
 					const record = evidence.add(name, params, result);
+					if (saveEvidence) {
+						try {
+							await saveEvidence(record);
+						} catch (error) {
+							throw new ToolInputError(
+								error instanceof Error ? `查询证据保存失败：${error.message}` : "查询证据保存失败。",
+							);
+						}
+					}
 					const source = await drawingSource(name, params, result);
 					if (source) chartSources.set(record.id, source);
 					const chart: ChartReference | null =
@@ -288,6 +303,8 @@ export function createIndustrialTools(selectedTable: DashboardTable, services: I
 						],
 						details: { evidenceId: "" },
 					};
+				} finally {
+					toolTimeUsed += Math.max(0, Date.now() - startedAt);
 				}
 			},
 		});
@@ -421,14 +438,26 @@ export function createIndustrialTools(selectedTable: DashboardTable, services: I
 		tool(
 			"summarize_metrics",
 			"时间窗口统计",
-			"程序计算完整有界窗口的采样均值、总体标准差、极值与首末变化率。可按秒分桶；不是时间加权均值，不外推全库。",
+			"程序计算完整有界窗口的采样均值、总体标准差、极值与首末变化率。可按秒分桶；condition可按明确阈值统计严格大于gt或严格小于lt的采样点数，metric须包含在metrics中；不是连续事件次数，不需要采样间隔或持续时间。不是时间加权均值，不外推全库。",
 			object({
 				...rangeInput,
 				...metricsInput,
 				bucketSeconds: Type.Optional(Type.Number({ exclusiveMinimum: 0, maximum: 604800 })),
+				condition: Type.Optional(
+					object({
+						metric: metricSchema,
+						operator: Type.Union([Type.Literal("gt"), Type.Literal("lt")]),
+						threshold: Type.Number(),
+					}),
+				),
 			}),
 			async (params, signal) =>
-				summarizeMetrics(await windowFor(params, signal), params.metrics ?? defaultMetrics, params.bucketSeconds),
+				summarizeMetrics(
+					await windowFor(params, signal),
+					params.metrics ?? defaultMetrics,
+					params.bucketSeconds,
+					params.condition,
+				),
 		),
 		tool(
 			"compare_metric_windows",

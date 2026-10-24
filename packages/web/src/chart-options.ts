@@ -6,6 +6,7 @@ import type {
 	YAXisComponentOption,
 } from "echarts";
 import type { ChartArtifact } from "../chart-contracts.ts";
+import { timeToSeconds } from "./time-display.ts";
 
 const colors = ["#2563eb", "#0f766e", "#b45309", "#7c3aed"];
 export function chartZoomViewport(value: unknown): { start: number; end: number }[] {
@@ -133,12 +134,12 @@ export function createChartOptions(chart: ChartArtifact, width: number, exportin
 		textStyle: { fontFamily: "system-ui, PingFang SC, Microsoft YaHei, sans-serif" },
 		aria: {
 			enabled: true,
-			description: `${chart.title}。${chart.sourceRecords}条来源记录，${chart.aggregation}。可使用数据视图读取数值。`,
+			description: `${timeToSeconds(chart.title)}。${chart.sourceRecords}条来源记录，${chart.aggregation}。可使用数据视图读取数值。`,
 		},
 		...(exporting
 			? {
 					title: {
-						text: chart.title,
+						text: timeToSeconds(chart.title),
 						subtext: source,
 						left: 20,
 						top: 12,

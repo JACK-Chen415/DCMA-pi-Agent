@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { getBackendStatus, streamChat } from "./api.ts";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { cancelChat, getBackendStatus, streamChat } from "./api.ts";
 import { ChatInput } from "./components/ChatInput";
 import { ChatView } from "./components/ChatView";
 import { DeviceModal } from "./components/DeviceModal";
@@ -10,8 +10,9 @@ import { SettingsModal } from "./components/SettingsModal";
 import { Sidebar } from "./components/Sidebar";
 import { TelemetryModal } from "./components/TelemetryModal";
 import { WelcomeView } from "./components/WelcomeView";
+import { createConversationStorage } from "./conversation-storage.ts";
 import { dashboardTables, databaseDataset, databaseDevice, databaseMetrics, useDashboard } from "./dashboard-data.ts";
-import { downloadText } from "./download.ts";
+import { downloadText, exportStatusEvent } from "./download.ts";
 import { loadWorkspace, storageKey } from "./storage.ts";
 import { getMetrics, parseTelemetry, telemetryCsv } from "./telemetry.ts";
 import type { AppSettings, BackendStatus, ChatMessage } from "./types.ts";
@@ -24,6 +25,9 @@ export function App() {
 	const [panelOpen, setPanelOpen] = useState(false);
 	const [notice, setNotice] = useState("");
 	const [storageError, setStorageError] = useState("");
+	const [historyError, setHistoryError] = useState("");
+	const [historyReady, setHistoryReady] = useState(false);
+	const [historyAttempt, setHistoryAttempt] = useState(0);
 	const [importError, setImportError] = useState("");
 	const [importing, setImporting] = useState(false);
 	const [renameId, setRenameId] = useState<string | null>(null);
@@ -31,7 +35,11 @@ export function App() {
 	const [deleteId, setDeleteId] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 	const request = useRef<AbortController | null>(null);
+	const requestId = useRef<string | null>(null);
 	const fileInput = useRef<HTMLInputElement>(null);
+	const workspaceRef = useRef(workspace);
+	workspaceRef.current = workspace;
+	const historyStorage = useRef<ReturnType<typeof createConversationStorage> | null>(null);
 	const table = dashboardTables.find((item) => item === workspace.deviceId) ?? dashboardTables[0];
 	const live = useDashboard(table, 100);
 	const devices = dashboardTables.map((name) =>
@@ -49,18 +57,107 @@ export function App() {
 	const checkedAt = live.data ? new Date(live.data.queriedAt).toLocaleString("zh-CN") : "尚未查询成功";
 	const conversation = workspace.conversations.find((item) => item.id === workspace.activeId);
 	const settings = workspace.settings;
+	const followReply = useCallback(
+		async (id: string, assistantId: string, controller: AbortController, payload?: unknown) => {
+			const updateReply = (update: (message: ChatMessage) => ChatMessage) =>
+				setWorkspace((state) => ({
+					...state,
+					conversations: state.conversations.map((item) =>
+						item.id === id
+							? {
+									...item,
+									messages: item.messages.map((message) =>
+										message.id === assistantId ? update(message) : message,
+									),
+								}
+							: item,
+					),
+				}));
+			try {
+				const status = await streamChat(
+					payload,
+					controller.signal,
+					(delta) => updateReply((message) => ({ ...message, content: message.content + delta })),
+					(chart) =>
+						updateReply((message) => ({
+							...message,
+							charts: (message.charts ?? []).some((item) => item.id === chart.id)
+								? message.charts
+								: [...(message.charts ?? []), chart].slice(0, 3),
+						})),
+					(text, charts) => updateReply((message) => ({ ...message, content: text, charts, status: "streaming" })),
+					payload === undefined ? assistantId : undefined,
+					(steps) => updateReply((message) => ({ ...message, steps })),
+				);
+				updateReply((message) => ({ ...message, status }));
+			} catch (error) {
+				updateReply((message) => ({
+					...message,
+					status: controller.signal.aborted ? "cancelled" : "error",
+					content:
+						message.content +
+						(controller.signal.aborted ? "" : `\n${error instanceof Error ? error.message : "请求失败"}`),
+				}));
+			} finally {
+				if (request.current === controller) {
+					request.current = null;
+					requestId.current = null;
+					setBusy(false);
+				}
+			}
+		},
+		[],
+	);
 
 	useEffect(() => {
+		if (historyAttempt > 0) setHistoryReady(false);
+		let active = true;
+		const storage = createConversationStorage(setHistoryError);
+		historyStorage.current = storage;
+		setHistoryError("");
+		void storage
+			.load(workspaceRef.current)
+			.then((saved) => {
+				if (!active) return;
+				setWorkspace((state) => ({ ...state, ...saved }));
+				setHistoryReady(true);
+			})
+			.catch((error: unknown) => {
+				if (active) setHistoryError(error instanceof Error ? error.message : "聊天记录读取失败，请重试。");
+			});
+		return () => {
+			active = false;
+			storage.dispose();
+		};
+	}, [historyAttempt]);
+	useEffect(() => {
+		if (historyReady) historyStorage.current?.update(workspace, busy);
+	}, [workspace, busy, historyReady]);
+	useEffect(() => {
+		if (!historyReady) return;
 		const timer = setTimeout(() => {
 			try {
 				localStorage.setItem(storageKey, JSON.stringify(workspace));
 				setStorageError("");
 			} catch {
-				setStorageError("浏览器存储空间不足，当前数据尚未保存。请导出会话和数据以保留记录。");
+				setStorageError("浏览器缓存写入失败，设置或导入数据可能无法恢复。聊天记录会另行保存到本机，可导出备份。");
 			}
 		}, 300);
 		return () => clearTimeout(timer);
-	}, [workspace]);
+	}, [workspace, historyReady]);
+	useEffect(() => {
+		if (!historyReady) return;
+		const save = () => {
+			try {
+				localStorage.setItem(storageKey, JSON.stringify(workspaceRef.current));
+			} catch {
+				// Server persistence does not depend on the browser cache.
+			}
+			void historyStorage.current?.flush(true);
+		};
+		window.addEventListener("pagehide", save);
+		return () => window.removeEventListener("pagehide", save);
+	}, [historyReady]);
 	useEffect(() => {
 		const controller = new AbortController();
 		let loading = false;
@@ -90,13 +187,40 @@ export function App() {
 	}, [settings.telemetryIntervalMs]);
 	useEffect(() => () => request.current?.abort(), []);
 	useEffect(() => {
+		if (!historyReady || busy || request.current) return;
+		for (const item of workspaceRef.current.conversations) {
+			const message = item.messages.find((entry) => entry.status === "streaming" && entry.role === "assistant");
+			if (!message) continue;
+			const controller = new AbortController();
+			request.current = controller;
+			requestId.current = message.id;
+			setBusy(true);
+			void followReply(item.id, message.id, controller);
+			break;
+		}
+	}, [historyReady, busy, followReply]);
+	useEffect(() => {
 		if (!notice) return;
 		const timer = setTimeout(() => setNotice(""), 7000);
 		return () => clearTimeout(timer);
 	}, [notice]);
+	useEffect(() => {
+		const exported = (event: Event) => {
+			if (event instanceof CustomEvent && typeof event.detail === "string") setNotice(event.detail);
+		};
+		window.addEventListener(exportStatusEvent, exported);
+		return () => window.removeEventListener(exportStatusEvent, exported);
+	}, []);
 
 	const stop = () => {
-		request.current?.abort();
+		const controller = request.current;
+		const id = requestId.current;
+		if (!controller || !id) return;
+		void cancelChat(id)
+			.then(() => controller.abort())
+			.catch((error: unknown) => {
+				setNotice(error instanceof Error ? error.message : "停止生成失败，请重试。");
+			});
 	};
 	const newChat = () => {
 		stop();
@@ -130,6 +254,7 @@ export function App() {
 		setBusy(true);
 		const id = conversation?.id ?? crypto.randomUUID();
 		const assistantId = crypto.randomUUID();
+		requestId.current = assistantId;
 		const now = new Date().toISOString();
 		const userMessage: ChatMessage = {
 			id: crypto.randomUUID(),
@@ -146,11 +271,11 @@ export function App() {
 			status: "streaming",
 			engine: `DCMA Agent · ${settings.model}`,
 		};
-		setWorkspace((state) => ({
-			...state,
+		const next = {
+			...workspace,
 			activeId: id,
 			conversations: conversation
-				? state.conversations.map((item) =>
+				? workspace.conversations.map((item) =>
 						item.id === id ? { ...item, time: now, messages: [...item.messages, userMessage, assistant] } : item,
 					)
 				: [
@@ -161,10 +286,45 @@ export function App() {
 							deviceId: device.id,
 							messages: [userMessage, assistant],
 						},
-						...state.conversations,
+						...workspace.conversations,
 					],
-		}));
-		const updateReply = (update: (message: ChatMessage) => ChatMessage) =>
+		};
+		workspaceRef.current = next;
+		setWorkspace(next);
+		try {
+			await historyStorage.current?.checkpoint(next);
+			controller.signal.throwIfAborted();
+			const databasePreferred = !offline || settings.databaseEnabled !== false;
+			await followReply(id, assistantId, controller, {
+				requestId: assistantId,
+				model: settings.model,
+				text: text.trim(),
+				context: databasePreferred
+					? JSON.stringify({
+							schema: "dcma",
+							table,
+							device: device.name,
+							source: table === "real_data" ? "历史真实采集" : "模拟数据",
+							note: "当前设备与展板使用同一数据源，请通过数据库工具重新查询；状态码未解码，不得推断运行状态。位置和投运日期未提供。",
+						})
+					: JSON.stringify({
+							device,
+							source: dataset.source,
+							imported: dataset.imported,
+							alarmThreshold: settings.alarmThreshold,
+							units: { temperature: "℃", vibration: "mm/s", current: "A", speed: "rpm" },
+							totalSamples: dataset.samples.length,
+							samples: dataset.samples.slice(-200),
+							note: "导入文件属于离线数据，仅提供最新最多200个采样点，不代表数据库当前读数或全量统计。",
+						}),
+				database: databasePreferred,
+				table,
+				history: (conversation?.messages ?? [])
+					.filter((message) => message.status === "done")
+					.slice(-20)
+					.map(({ role, content }) => ({ role, content: content.slice(0, 8000) })),
+			});
+		} catch (error) {
 			setWorkspace((state) => ({
 				...state,
 				conversations: state.conversations.map((item) =>
@@ -172,68 +332,22 @@ export function App() {
 						? {
 								...item,
 								messages: item.messages.map((message) =>
-									message.id === assistantId ? update(message) : message,
+									message.id === assistantId
+										? {
+												...message,
+												status: controller.signal.aborted ? "cancelled" : "error",
+												content: error instanceof Error ? error.message : "请求失败",
+											}
+										: message,
 								),
 							}
 						: item,
 				),
 			}));
-		try {
-			const databasePreferred = !offline || settings.databaseEnabled !== false;
-			await streamChat(
-				{
-					model: settings.model,
-					text: text.trim(),
-					context: databasePreferred
-						? JSON.stringify({
-								schema: "dcma",
-								table,
-								device: device.name,
-								source: table === "real_data" ? "历史真实采集" : "模拟数据",
-								note: "当前设备与展板使用同一数据源，请通过数据库工具重新查询；状态码未解码，不得推断运行状态。位置和投运日期未提供。",
-							})
-						: JSON.stringify({
-								device,
-								source: dataset.source,
-								imported: dataset.imported,
-								alarmThreshold: settings.alarmThreshold,
-								units: { temperature: "℃", vibration: "mm/s", current: "A", speed: "rpm" },
-								totalSamples: dataset.samples.length,
-								samples: dataset.samples.slice(-200),
-								note: "导入文件属于离线数据，仅提供最新最多200个采样点，不代表数据库当前读数或全量统计。",
-							}),
-					database: databasePreferred,
-					table,
-					history: (conversation?.messages ?? [])
-						.filter((message) => message.status === "done")
-						.slice(-20)
-						.map(({ role, content }) => ({ role, content: content.slice(0, 8000) })),
-				},
-				controller.signal,
-				(delta) => updateReply((message) => ({ ...message, content: message.content + delta })),
-				(chart) =>
-					updateReply((message) => ({
-						...message,
-						charts: (message.charts ?? []).some((item) => item.id === chart.id)
-							? message.charts
-							: [...(message.charts ?? []), chart].slice(0, 3),
-					})),
-			);
-			updateReply((message) => ({
-				...message,
-				status: "done",
-			}));
-		} catch (error) {
-			updateReply((message) => ({
-				...message,
-				status: controller.signal.aborted ? "cancelled" : "error",
-				content:
-					message.content +
-					(controller.signal.aborted ? "" : `\n${error instanceof Error ? error.message : "请求失败"}`),
-			}));
 		} finally {
 			if (request.current === controller) {
 				request.current = null;
+				requestId.current = null;
 				setBusy(false);
 			}
 		}
@@ -280,6 +394,36 @@ export function App() {
 		setImportError("");
 		setModal("import");
 	};
+	if (!historyReady)
+		return (
+			<main className="min-h-dvh bg-[#f4f7fb] p-8 text-slate-800">
+				<output>{historyError || "正在恢复本机聊天记录…"}</output>
+				{historyError && (
+					<div className="flex gap-4 mt-4">
+						<button
+							type="button"
+							className="text-blue-600"
+							onClick={() => setHistoryAttempt((attempt) => attempt + 1)}
+						>
+							重试读取
+						</button>
+						<button
+							type="button"
+							className="text-blue-600"
+							onClick={() =>
+								downloadText(
+									"DCMA-conversations.json",
+									JSON.stringify(workspace.conversations, null, 2),
+									"application/json;charset=utf-8",
+								)
+							}
+						>
+							导出浏览器中的会话
+						</button>
+					</div>
+				)}
+			</main>
+		);
 	return (
 		<div className="flex h-dvh w-full overflow-hidden bg-[#f4f7fb] text-slate-800 font-sans">
 			{(sidebarOpen || panelOpen) && (
@@ -332,9 +476,9 @@ export function App() {
 					<span>{offline ? "当前为离线导入数据；展板使用 MySQL" : "Agent 与展板使用同一 MySQL 数据来源"}</span>
 					{!backend.models.length && <span className="text-amber-700">模型尚未授权，请打开设置</span>}
 				</div>
-				{(notice || storageError) && (
+				{(notice || storageError || historyError) && (
 					<output className="block mx-4 mb-2 p-2 rounded-xl bg-amber-50 text-amber-800 text-xs">
-						{storageError || notice}
+						{historyError || storageError || notice}
 					</output>
 				)}
 				{conversation ? (

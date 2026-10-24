@@ -1,5 +1,8 @@
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { downloadSavedFile } from "../download.ts";
+import { remarkLimitations } from "../remark-limitations.ts";
+import { remarkSecondPrecision } from "../time-display.ts";
 
 const components: Components = {
 	table: ({ children }) => (
@@ -9,7 +12,20 @@ const components: Components = {
 		</section>
 	),
 	a: ({ children, href, title }) => (
-		<a href={href} title={title} target="_blank" rel="noopener noreferrer">
+		<a
+			href={href}
+			title={title}
+			target="_blank"
+			rel="noopener noreferrer"
+			onClick={
+				href && /^\/api\/tools\/(?:reports\/[0-9a-f-]{36}\.(?:md|json)|charts\/[0-9a-f-]{36}\.csv)$/.test(href)
+					? (event) => {
+							event.preventDefault();
+							downloadSavedFile(href);
+						}
+					: undefined
+			}
+		>
 			{children}
 		</a>
 	),
@@ -18,7 +34,11 @@ const components: Components = {
 export function MessageContent({ content }: { content: string }) {
 	return (
 		<div className="message-markdown">
-			<Markdown remarkPlugins={[remarkGfm]} components={components} skipHtml>
+			<Markdown
+				remarkPlugins={[remarkGfm, remarkSecondPrecision, remarkLimitations]}
+				components={components}
+				skipHtml
+			>
 				{content}
 			</Markdown>
 		</div>

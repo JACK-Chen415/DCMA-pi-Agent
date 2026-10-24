@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { chmod, lstat, mkdir, open, readdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import type { EvidenceRecord } from "../interaction-contracts.ts";
 import { ToolInputError } from "./contracts.ts";
 
 export async function preparePrivateDirectory(directory: string): Promise<void> {
@@ -10,14 +11,6 @@ export async function preparePrivateDirectory(directory: string): Promise<void> 
 	if (!info.isDirectory() || info.isSymbolicLink())
 		throw new ToolInputError("本地工具目录必须是真实目录，不能使用符号链接。");
 	await chmod(directory, 0o700);
-}
-
-export interface EvidenceRecord {
-	id: string;
-	tool: string;
-	createdAt: string;
-	input: unknown;
-	result: unknown;
 }
 
 export function createEvidenceStore() {

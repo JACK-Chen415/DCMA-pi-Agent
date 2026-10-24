@@ -64,7 +64,8 @@ body {
 }
 
 .panel-card { background: white; border: 1px solid #e2e8f0; border-radius: 1rem; padding: 1rem; }
-.message-markdown { min-width: 0; font-size: 13px; line-height: 1.75; overflow-wrap: anywhere; }
+.message-markdown { min-width: 0; font-size: 14px; line-height: 1.8; overflow-wrap: anywhere; }
+.message-markdown .answer-limitation { font-size: 12px; }
 .message-markdown > :first-child { margin-top: 0; }
 .message-markdown > :last-child { margin-bottom: 0; }
 .message-markdown p, .message-markdown ul, .message-markdown ol, .message-markdown blockquote, .message-markdown pre { margin: .8rem 0; }
@@ -96,6 +97,20 @@ body {
 .dialog-shell::backdrop { background: rgb(15 23 42 / 40%); backdrop-filter: blur(3px); }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid #2563eb; outline-offset: 3px; }
 button:disabled { cursor: not-allowed; }
+.message-actions { display: flex; flex-wrap: wrap; gap: 8px; border-top: 1px solid #e2e8f0; margin-top: 16px; padding-top: 10px; }
+.message-actions button { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 6px 10px; font-size: 12px; color: #1d4ed8; border-radius: 8px; }
+.message-actions button:hover:not(:disabled) { background: #eff6ff; }
+.message-actions button:disabled { opacity: .5; }
+.execution-details { margin-top: 12px; color: #475569; font-size: 12px; line-height: 1.8; }
+.execution-progress { display: block; color: #1d4ed8; padding: 8px 0; }
+.execution-details summary { padding: 8px 0; cursor: pointer; color: #1d4ed8; min-height: 36px; }
+.execution-details summary:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+.execution-details ol { border-left: 2px solid #bfdbfe; padding-left: 12px; margin: 4px 0 10px; }
+.execution-details li { padding: 10px 0; overflow-wrap: anywhere; }
+.execution-details li + li { border-top: 1px solid #e2e8f0; }
+.execution-details p { white-space: pre-wrap; margin: 6px 0; }
+.execution-step-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; }
+.execution-details pre { max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: #f8fafc; padding: 10px; border: 1px solid #e2e8f0; border-radius: 8px; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; scroll-behavior: auto !important; } }
 
 .analysis-chart-card { margin-top: 18px; border: 1px solid #dde7f2; border-radius: 16px; overflow: hidden; background: white; min-width: 0; }

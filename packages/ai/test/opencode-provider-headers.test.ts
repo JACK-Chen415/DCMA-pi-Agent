@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fauxAssistantMessage } from "../src/providers/faux.ts";
+import { opencodeGoProvider } from "../src/providers/opencode-go.ts";
 import { withOpenCodeSessionHeader } from "../src/providers/opencode-headers.ts";
 import type { Api, Model, ProviderStreams, StreamOptions } from "../src/types.ts";
 import { AssistantMessageEventStream } from "../src/utils/event-stream.ts";
 import { normalizeContext } from "../src/utils/transcript.ts";
+
+const googleStreams = vi.hoisted(() => ({ stream: vi.fn(), streamSimple: vi.fn() }));
+vi.mock("../src/api/google-generative-ai.lazy.ts", () => ({ googleGenerativeAIApi: () => googleStreams }));
 
 const model: Model<Api> = {
 	id: "test-model",
@@ -42,6 +46,19 @@ function recordingStreams(capture: (options: StreamOptions | undefined) => void)
 }
 
 describe("OpenCode provider headers", () => {
+	it.each(["stream", "streamSimple"] as const)("dispatches OpenCode Go Gemini %s with a session header", (method) => {
+		const provider = opencodeGoProvider();
+		const gemini = provider.getModels().find((candidate) => candidate.api === "google-generative-ai");
+		expect(gemini).toBeDefined();
+		googleStreams[method].mockReturnValueOnce(completedStream());
+		provider[method](gemini!, context, { apiKey: "test", sessionId: "gemini-session" });
+		expect(googleStreams[method]).toHaveBeenLastCalledWith(gemini, context, {
+			apiKey: "test",
+			sessionId: "gemini-session",
+			headers: { "x-opencode-session": "gemini-session" },
+		});
+	});
+
 	// Regression test for https://github.com/earendil-works/pi/issues/9326
 	it.each(["stream", "streamSimple"] as const)(
 		"maps sessionId for %s requests even without cache retention",

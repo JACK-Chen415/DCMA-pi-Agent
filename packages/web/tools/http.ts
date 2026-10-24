@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { chartCsv, readChart } from "./chart-files.ts";
+import { readEvidence } from "./evidence-files.ts";
 import type { IndustrialServices } from "./index.ts";
 import { createIndustrialTools } from "./index.ts";
 import { readReport } from "./runtime-files.ts";
@@ -21,6 +22,20 @@ export async function handleToolHttp(
 	url: URL,
 	services: IndustrialServices,
 ): Promise<boolean> {
+	if (url.pathname.startsWith("/api/tools/evidence/")) {
+		if (request.method !== "GET") {
+			json(response, 405, { error: "仅支持 GET" });
+			return true;
+		}
+		const match = /^\/api\/tools\/evidence\/([0-9a-f-]{36})\.json$/.exec(url.pathname);
+		try {
+			if (!match) throw new Error("无效编号");
+			json(response, 200, await readEvidence(services.directory, match[1]));
+		} catch {
+			json(response, 404, { error: "查询证据未保存、已归档或不可读取。旧会话不会自动补查数据。" });
+		}
+		return true;
+	}
 	if (url.pathname.startsWith("/api/tools/charts/")) {
 		if (request.method !== "GET") {
 			json(response, 405, { error: "仅支持 GET" });

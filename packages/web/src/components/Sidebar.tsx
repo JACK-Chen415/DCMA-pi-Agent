@@ -48,9 +48,7 @@ export function Sidebar({
 			</button>
 			<p className="text-xs text-slate-500 mb-3">最近对话 · {conversations.length}</p>
 			<div className="flex-1 overflow-y-auto space-y-2">
-				{!conversations.length && (
-					<p className="text-xs text-slate-400 py-4">发送问题后，会话会自动保存到本浏览器。</p>
-				)}
+				{!conversations.length && <p className="text-xs text-slate-400 py-4">发送问题后，会话会自动保存到本机。</p>}
 				{conversations.map((item) => (
 					<div
 						key={item.id}

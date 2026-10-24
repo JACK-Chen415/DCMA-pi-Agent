@@ -12,6 +12,7 @@ import {
 import { type StateRuleSet, ToolInputError } from "./contracts.ts";
 
 const MAX_BYTES = 1024 * 1024;
+const MAX_KNOWLEDGE_BYTES = 8 * 1024 * 1024;
 const codeKinds = ["fault", "alarm", "status", "control"] as const;
 export type KnowledgeCodeKind = (typeof codeKinds)[number];
 export interface KnowledgeIdentity {
@@ -199,7 +200,7 @@ function entries(value: unknown): KnowledgeEntry[] {
 	const root = object(value, ["entries"]);
 	const seen = new Set<string>();
 	let codeCount = 0;
-	return list(root.entries, 500).map((value) => {
+	return list(root.entries, 2000).map((value) => {
 		const item = object(value, ["id", "manufacturer", "model", "version", "kind", "text", "source", "codes"]);
 		const id = string(item.id, 128);
 		if (seen.has(id) || (item.kind !== "manual" && item.kind !== "case")) return invalid();
@@ -229,7 +230,12 @@ function entries(value: unknown): KnowledgeEntry[] {
 	});
 }
 
-async function readConfig<T>(directory: string, filename: string, parse: (value: unknown) => T): Promise<T | null> {
+async function readConfig<T>(
+	directory: string,
+	filename: string,
+	parse: (value: unknown) => T,
+	maxBytes = MAX_BYTES,
+): Promise<T | null> {
 	let handle: FileHandle;
 	try {
 		handle = await open(join(directory, filename), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -239,15 +245,15 @@ async function readConfig<T>(directory: string, filename: string, parse: (value:
 	}
 	try {
 		const stat = await handle.stat();
-		if (!stat.isFile() || stat.size > MAX_BYTES) return invalid();
-		const buffer = Buffer.alloc(MAX_BYTES + 1);
+		if (!stat.isFile() || stat.size > maxBytes) return invalid();
+		const buffer = Buffer.alloc(maxBytes + 1);
 		let size = 0;
 		while (size < buffer.length) {
 			const read = await handle.read(buffer, size, buffer.length - size, size);
 			if (read.bytesRead === 0) break;
 			size += read.bytesRead;
 		}
-		if (size > MAX_BYTES) return invalid();
+		if (size > maxBytes) return invalid();
 		return parse(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, size))) as unknown);
 	} catch {
 		return invalid();
@@ -284,6 +290,14 @@ export function createKnowledgeService(directory: string) {
 				verified: false as const,
 				fieldLabels,
 				stateRules: profile?.stateRules ?? null,
+				codeConventions: {
+					source: "DCMA采样约定（用户确认），与展板故障/报警事件规则一致。",
+					fault_code: { zero: "未报告故障", nonzero: "存在故障码，具体含义需查故障手册。" },
+					alarm_code: { zero: "未报告报警", nonzero: "存在报警码，具体含义需查故障手册。" },
+					missing: "缺失或空白是未知，不能当作0。",
+					otherCodes: "status、control_word、status_word仍需对应定义，不能套用故障/报警零码约定。",
+					limitation: "零码仅描述该采样未报告故障/报警，不能证明正在运行、在线或设备健康。",
+				},
 				measurements: numericFields.map((field) => ({
 					field,
 					label: fieldLabels[field],
@@ -297,7 +311,7 @@ export function createKnowledgeService(directory: string) {
 			const device = identity(query);
 			const lookupCode = string(query.code, 128);
 			if (!codeKinds.includes(query.kind as KnowledgeCodeKind)) return invalid();
-			const data = await readConfig(directory, "knowledge.json", entries);
+			const data = await readConfig(directory, "knowledge.json", entries, MAX_KNOWLEDGE_BYTES);
 			const found = (data ?? [])
 				.filter(
 					(item) =>
@@ -312,6 +326,7 @@ export function createKnowledgeService(directory: string) {
 							id: item.id,
 							...device,
 							...code,
+							text: item.text,
 							entryKind: item.kind,
 							source: item.source,
 							sourceStatus: "user_provided" as const,
@@ -345,7 +360,7 @@ export function createKnowledgeService(directory: string) {
 			const tokens = new Set(text.match(/[\p{L}\p{N}]+/gu) ?? []);
 			for (const run of text.match(/[\p{Script=Han}]+/gu) ?? [])
 				for (let i = 0; i < run.length - 1; i++) tokens.add(run.slice(i, i + 2));
-			const data = await readConfig(directory, "knowledge.json", entries);
+			const data = await readConfig(directory, "knowledge.json", entries, MAX_KNOWLEDGE_BYTES);
 			const ranked = (data ?? [])
 				.filter((item) =>
 					(["manufacturer", "model", "version"] as const).every(

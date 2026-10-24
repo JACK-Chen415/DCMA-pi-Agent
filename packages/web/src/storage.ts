@@ -1,5 +1,6 @@
 import { dashboardTables } from "../../../dashboard/database/dashboard-types.ts";
 import { validateChartReference } from "../chart-contracts.ts";
+import { validateToolSteps } from "../interaction-contracts.ts";
 import { createDemoDatasets, defaultSettings, initialDevices } from "./mockData.ts";
 import { parseTelemetry } from "./telemetry.ts";
 import type { AppSettings, ConversationItem, Dataset } from "./types.ts";
@@ -69,6 +70,7 @@ export function loadWorkspace(): WorkspaceState {
 					return [
 						{
 							id: message.id,
+							steps: message.steps === undefined ? undefined : validateToolSteps(message.steps),
 							charts: Array.isArray(message.charts)
 								? message.charts.slice(0, 3).flatMap((value: unknown, index: number, values: unknown[]) => {
 										const chart = validateChartReference(value);
@@ -85,9 +87,11 @@ export function loadWorkspace(): WorkspaceState {
 							status:
 								message.status === "error"
 									? ("error" as const)
-									: message.status === "streaming" || message.status === "cancelled"
-										? ("cancelled" as const)
-										: ("done" as const),
+									: message.status === "streaming"
+										? ("streaming" as const)
+										: message.status === "cancelled"
+											? ("cancelled" as const)
+											: ("done" as const),
 						},
 					];
 				});

@@ -220,8 +220,35 @@ function statistics(rows: ReturnType<typeof prepare>["rows"], counts: Map<number
 	};
 }
 
-export function summarizeMetrics(window: AnalysisWindow, metrics: NumericField[], bucketSeconds?: number) {
+export interface CountCondition {
+	metric: NumericField;
+	operator: "gt" | "lt";
+	threshold: number;
+}
+export function summarizeMetrics(
+	window: AnalysisWindow,
+	metrics: NumericField[],
+	bucketSeconds?: number,
+	condition?: CountCondition,
+) {
 	const data = prepare(window, metrics);
+	let matched = 0,
+		valid = 0;
+	if (condition) {
+		if (
+			!metrics.includes(condition.metric) ||
+			!window.availableFields.includes(condition.metric) ||
+			!["gt", "lt"].includes(condition.operator) ||
+			!Number.isFinite(condition.threshold)
+		)
+			throw new ToolInputError("采样点计数条件无效，请选择统计中的有效字段与有限阈值。");
+		for (const { record } of data.rows) {
+			const value = metricValue(record, condition.metric);
+			if (value === null) continue;
+			valid++;
+			if (condition.operator === "gt" ? value > condition.threshold : value < condition.threshold) matched++;
+		}
+	}
 	const buckets: { from: string; to: string; records: number; metrics: ReturnType<typeof statistics>[] }[] = [];
 	if (bucketSeconds !== undefined) {
 		positiveSeconds(bucketSeconds, "聚合桶秒数");
@@ -252,6 +279,16 @@ export function summarizeMetrics(window: AnalysisWindow, metrics: NumericField[]
 		missingFields: metrics.filter((field) => !window.availableFields.includes(field)),
 		records: data.rows.length,
 		metrics: metrics.map((metric) => statistics(data.rows, data.counts, metric)),
+		condition: condition
+			? {
+					...condition,
+					matched,
+					valid,
+					missing: data.rows.length - valid,
+					notMatched: valid - matched,
+					meaning: "采样点数，不是连续事件次数",
+				}
+			: null,
 		bucketSeconds: bucketSeconds ?? null,
 		bucketBoundary: "left_closed_right_open_except_range_end",
 		buckets,

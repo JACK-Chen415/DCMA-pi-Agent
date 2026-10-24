@@ -3,22 +3,20 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { extname, resolve, sep } from "node:path";
 import { loadEnvFile } from "node:process";
 import { fileURLToPath } from "node:url";
-import {
-	createAgentSession,
-	createExtensionRuntime,
-	ModelRuntime,
-	type ResourceLoader,
-	SessionManager,
-	SettingsManager,
-} from "@earendil-works/pi-coding-agent";
+import { createAgentSession, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createServer as createViteServer, type ViteDevServer } from "vite";
 import { type DashboardTable, dashboardTables } from "../../dashboard/database/dashboard-types.ts";
 import { createDatabaseServer } from "../../dashboard/database/server.ts";
 import { closeDatabase } from "./database.ts";
 import { chartToolEvent } from "./tools/chart-stream.ts";
+import { chatRunIdPattern, createChatRuns } from "./tools/chat-runs.ts";
+import { createChatTimeout } from "./tools/chat-timeout.ts";
+import { createConversationStore, handleConversationHttp } from "./tools/conversation-store.ts";
+import { createEvidenceArchive } from "./tools/evidence-files.ts";
+import { handleExportHttp } from "./tools/exports.ts";
 import { handleToolHttp } from "./tools/http.ts";
 import { createIndustrialServices, createIndustrialTools } from "./tools/index.ts";
-import { industrialSystemPrompt } from "./tools/prompt.ts";
+import { createIndustrialResourceLoader } from "./tools/resources.ts";
 import { preparePrivateDirectory } from "./tools/runtime-files.ts";
 import { toolTraceEvent } from "./tools/trace.ts";
 
@@ -32,6 +30,9 @@ const production = process.argv.includes("--production");
 const toolDirectory = resolve(root, ".dcma-runtime");
 await preparePrivateDirectory(toolDirectory);
 const industrial = createIndustrialServices(toolDirectory);
+const conversations = createConversationStore(toolDirectory);
+const chatRuns = createChatRuns();
+const resourceLoader = createIndustrialResourceLoader();
 const port = Number(process.env.DCMA_PORT ?? 3000);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("DCMA_PORT 必须是有效端口。");
 let runtimePromise: Promise<ModelRuntime> | undefined;
@@ -67,6 +68,7 @@ async function readBody(request: IncomingMessage): Promise<unknown> {
 	return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
 }
 function validChat(value: unknown): value is {
+	requestId: string;
 	model: string;
 	text: string;
 	context: string;
@@ -77,6 +79,8 @@ function validChat(value: unknown): value is {
 	if (!value || typeof value !== "object") return false;
 	const body = value as Record<string, unknown>;
 	return (
+		typeof body.requestId === "string" &&
+		chatRunIdPattern.test(body.requestId) &&
 		typeof body.model === "string" &&
 		body.model.length <= 300 &&
 		typeof body.text === "string" &&
@@ -100,6 +104,28 @@ function validChat(value: unknown): value is {
 	);
 }
 async function api(request: IncomingMessage, response: ServerResponse, path: URL): Promise<void> {
+	if (path.pathname === "/api/exports") {
+		await handleExportHttp(request, response);
+		return;
+	}
+	if (path.pathname.startsWith("/api/chat/")) {
+		const id = path.pathname.slice("/api/chat/".length);
+		const run = chatRunIdPattern.test(id) ? chatRuns.get(id) : undefined;
+		if (!run) {
+			json(response, 404, { error: "生成任务已不可用，可能因后端重启而停止。已保存的内容仍保留，请重新发送问题。" });
+			return;
+		}
+		if (request.method === "GET") run.attach(response);
+		else if (request.method === "DELETE" && request.headers["x-dcma-client"] === "web") {
+			run.cancel();
+			json(response, 200, { cancelled: true });
+		} else json(response, 405, { error: "仅支持读取任务或明确停止生成。" });
+		return;
+	}
+	if (path.pathname === "/api/conversations") {
+		await handleConversationHttp(request, response, conversations);
+		return;
+	}
 	if (await handleToolHttp(request, response, path, industrial)) return;
 	if (path.pathname === "/api/health" && request.method === "GET") {
 		try {
@@ -153,97 +179,102 @@ async function api(request: IncomingMessage, response: ServerResponse, path: URL
 		json(response, 503, { error: "所选模型未授权或不可用。请授权后刷新模型列表。" });
 		return;
 	}
-	const resourceLoader: ResourceLoader = {
-		getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
-		getSkills: () => ({ skills: [], diagnostics: [] }),
-		getPrompts: () => ({ prompts: [], diagnostics: [] }),
-		getThemes: () => ({ themes: [], diagnostics: [] }),
-		getAgentsFiles: () => ({ agentsFiles: [] }),
-		getSystemPrompt: () =>
-			`${industrialSystemPrompt}\n本轮当前时刻（UTC）：${new Date().toISOString()}；北京时间为UTC+08:00。`,
-		getSystemPromptSource: () => undefined,
-		getAppendSystemPrompt: () => [],
-		getAppendSystemPromptSources: () => [],
-		extendResources: () => {},
-		reload: async () => {},
-	};
-	const industrialTools = createIndustrialTools(body.table ?? "real_data_01", industrial);
-	const { session } = await createAgentSession({
-		cwd: root,
-		modelRuntime: runtime,
-		model,
-		resourceLoader,
-		tools: industrialTools.map((tool) => tool.name),
-		customTools: industrialTools,
-		sessionManager: SessionManager.inMemory(root),
-		settingsManager: SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: false } }),
-	});
-	activeSessions.add(session);
-	let failure = "";
-	let textLength = 0;
-	let disconnected = response.destroyed;
-	const close = () => {
-		disconnected = true;
-		void session.abort();
-	};
-	response.once("close", close);
-	const timeout = setTimeout(() => {
-		failure = "模型响应超时，请稍后重试。";
-		void session.abort();
-	}, 120000);
-	const emit = (event: unknown) => {
-		if (!response.destroyed) response.write(`${JSON.stringify(event)}\n`);
-	};
-	const unsubscribe = session.subscribe((event) => {
-		const chart = chartToolEvent(event);
-		if (chart) emit(chart);
-		const trace = toolTraceEvent(event);
-		if (trace) emit(trace);
-		if (event.type === "message_end" && event.message.role === "assistant") {
-			const usage = event.message.usage;
-			emit({
-				type: "usage",
-				input: usage.input,
-				output: usage.output,
-				cacheRead: usage.cacheRead,
-				cacheWrite: usage.cacheWrite,
-				totalTokens: usage.totalTokens,
-				cost: usage.cost.total,
-			});
-		}
-		if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-			textLength += event.assistantMessageEvent.delta.length;
-			emit({ type: "delta", text: event.assistantMessageEvent.delta });
-		}
-		if (
-			event.type === "message_end" &&
-			event.message.role === "assistant" &&
-			(event.message.stopReason === "error" || event.message.stopReason === "aborted")
-		)
-			failure ||= "模型请求失败或被中止，请检查授权与模型服务状态。";
-	});
-	response.writeHead(200, {
-		"Content-Type": "application/x-ndjson; charset=utf-8",
-		"Cache-Control": "no-store",
-		"X-Content-Type-Options": "nosniff",
-	});
+	const existing = chatRuns.get(body.requestId);
+	if (existing) {
+		existing.attach(response);
+		return;
+	}
+	if (activeChatRequests >= 4) {
+		json(response, 429, { error: "当前请求过多，请稍后重试" });
+		return;
+	}
+	const run = chatRuns.create(body.requestId);
+	activeChatRequests++;
+	run.attach(response);
 	try {
-		if (disconnected) return;
-		await session.prompt(
-			`数据模式：${body.database ? "优先查询 MySQL；需要实际数据时必须调用工具，失败不能用示例替代。仅澄清需求时无需读取数据。" : "优先分析侧栏示例或导入文件；用户明确询问数据库时仍可调用数据库工具，不能混淆数据来源。"}\n当前背景：\n${body.context}\n\n此前对话（JSON）：\n${JSON.stringify(body.history)}\n\n当前用户问题：\n${body.text}`,
+		const industrialTools = createIndustrialTools(
+			body.table ?? "real_data_01",
+			industrial,
+			createEvidenceArchive(toolDirectory, body.requestId),
 		);
-		if (failure) emit({ type: "error", message: failure });
-		else if (!textLength) emit({ type: "error", message: "模型未返回文本，请尝试其他已授权模型。" });
-		else emit({ type: "done" });
+		const { session } = await createAgentSession({
+			cwd: root,
+			modelRuntime: runtime,
+			model,
+			resourceLoader,
+			tools: industrialTools.map((tool) => tool.name),
+			customTools: industrialTools,
+			sessionManager: SessionManager.inMemory(root),
+			settingsManager: SettingsManager.inMemory({ retry: { enabled: false }, compaction: { enabled: false } }),
+		});
+		activeSessions.add(session);
+		let failure = "";
+		let textLength = 0;
+		const cancel = () => void session.abort();
+		run.signal.addEventListener("abort", cancel, { once: true });
+		const timeout = createChatTimeout((message) => {
+			failure = message;
+			run.emit({ type: "error", message });
+			void session.abort();
+		});
+		const emit = run.emit;
+		const unsubscribe = session.subscribe((event) => {
+			if (event.type === "tool_execution_start") timeout.touch("执行数据分析");
+			else if (event.type === "tool_execution_end") timeout.touch("整理分析结果");
+			else if (event.type === "message_update") timeout.touch("生成回答");
+			const chart = chartToolEvent(event);
+			if (chart) emit(chart);
+			const trace = toolTraceEvent(event);
+			if (trace) emit(trace);
+			if (event.type === "message_end" && event.message.role === "assistant") {
+				const usage = event.message.usage;
+				emit({
+					type: "usage",
+					input: usage.input,
+					output: usage.output,
+					cacheRead: usage.cacheRead,
+					cacheWrite: usage.cacheWrite,
+					totalTokens: usage.totalTokens,
+					cost: usage.cost.total,
+				});
+			}
+			if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+				textLength += event.assistantMessageEvent.delta.length;
+				emit({ type: "delta", text: event.assistantMessageEvent.delta });
+			}
+			if (
+				event.type === "message_end" &&
+				event.message.role === "assistant" &&
+				(event.message.stopReason === "error" ||
+					event.message.stopReason === "aborted" ||
+					event.message.stopReason === "length")
+			)
+				failure ||=
+					event.message.stopReason === "length"
+						? "模型输出达到上限，回答尚未完成。请缩小问题范围后重试。"
+						: "模型请求失败或被中止，请检查授权与模型服务状态。";
+		});
+		try {
+			if (run.signal.aborted) return;
+			await session.prompt(
+				`数据模式：${body.database ? "优先查询 MySQL；需要实际数据时必须调用工具，失败不能用示例替代。仅澄清需求时无需读取数据。" : "优先分析侧栏示例或导入文件；用户明确询问数据库时仍可调用数据库工具，不能混淆数据来源。"}\n当前背景：\n${body.context}\n\n此前对话（JSON）：\n${JSON.stringify(body.history)}\n\n当前用户问题：\n${body.text}`,
+			);
+			if (failure) emit({ type: "error", message: failure });
+			else if (!textLength) emit({ type: "error", message: "模型未返回文本，请尝试其他已授权模型。" });
+			else emit({ type: "done" });
+		} catch {
+			emit({ type: "error", message: "模型调用失败，请检查授权、网络与上下文长度。" });
+		} finally {
+			timeout.dispose();
+			unsubscribe();
+			run.signal.removeEventListener("abort", cancel);
+			session.dispose();
+			activeSessions.delete(session);
+		}
 	} catch {
-		emit({ type: "error", message: "模型调用失败，请检查授权、网络与上下文长度。" });
+		run.emit({ type: "error", message: "模型初始化失败，请检查本机模型配置。" });
 	} finally {
-		clearTimeout(timeout);
-		unsubscribe();
-		response.off("close", close);
-		session.dispose();
-		activeSessions.delete(session);
-		response.end();
+		activeChatRequests--;
 	}
 }
 
@@ -277,20 +308,10 @@ const server = createServer((request, response) => {
 	if (path.pathname.startsWith("/api/database/")) {
 		databaseServer.emit("request", request, response);
 	} else if (path.pathname.startsWith("/api/")) {
-		const chatRequest = path.pathname === "/api/chat" && request.method === "POST";
-		if (chatRequest && activeChatRequests >= 4) {
-			json(response, 429, { error: "当前请求过多，请稍后重试" });
-			return;
-		}
-		if (chatRequest) activeChatRequests++;
-		void api(request, response, path)
-			.catch(() => {
-				if (!response.headersSent) json(response, 500, { error: "后端处理失败，请检查本机模型配置" });
-				else response.end();
-			})
-			.finally(() => {
-				if (chatRequest) activeChatRequests--;
-			});
+		void api(request, response, path).catch(() => {
+			if (!response.headersSent) json(response, 500, { error: "后端处理失败，请检查本机模型配置" });
+			else response.end();
+		});
 	} else if (path.pathname === "/dashboard") {
 		response.writeHead(302, { Location: `/dashboard/${path.search}` });
 		response.end();

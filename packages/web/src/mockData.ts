@@ -77,7 +77,7 @@ export const suggestionCards: SuggestionCard[] = [
 	{
 		id: "s1",
 		title: "设备信息查询",
-		query: "查询当前设备的基本信息和数据状态",
+		query: "查询当前设备的基本信息和最近一小时的状态概况",
 		iconBg: "bg-blue-50",
 		iconColor: "text-blue-600",
 		iconType: "search",

@@ -1,4 +1,5 @@
 import { type ChartReference, validateChartReference } from "../chart-contracts.ts";
+import { type ToolStep, updateToolSteps, validateToolSteps } from "../interaction-contracts.ts";
 import type { BackendStatus } from "./types.ts";
 
 export async function getBackendStatus(signal?: AbortSignal, refresh = false): Promise<BackendStatus> {
@@ -12,11 +13,14 @@ export async function streamChat(
 	signal: AbortSignal,
 	onDelta: (text: string) => void,
 	onChart?: (chart: ChartReference) => void,
-): Promise<void> {
-	const response = await fetch("/api/chat", {
-		method: "POST",
+	onSnapshot?: (text: string, charts: ChartReference[]) => void,
+	requestId?: string,
+	onSteps?: (steps: ToolStep[]) => void,
+): Promise<"done" | "cancelled"> {
+	const response = await fetch(requestId ? `/api/chat/${encodeURIComponent(requestId)}` : "/api/chat", {
+		method: requestId ? "GET" : "POST",
 		headers: { "Content-Type": "application/json", "X-DCMA-Client": "web" },
-		body: JSON.stringify(payload),
+		body: requestId ? undefined : JSON.stringify(payload),
 		signal,
 	});
 	if (!response.ok) {
@@ -32,17 +36,40 @@ export async function streamChat(
 	const decoder = new TextDecoder();
 	let buffer = "";
 	let finished = false;
+	let cancelled = false;
+	let steps: ToolStep[] = [];
 	const consume = (line: string) => {
 		if (!line.trim()) return;
 		const event: unknown = JSON.parse(line);
 		if (!event || typeof event !== "object" || !("type" in event)) throw new Error("响应格式无效。");
-		if (event.type === "delta" && "text" in event && typeof event.text === "string") onDelta(event.text);
+		if (
+			event.type === "snapshot" &&
+			"text" in event &&
+			typeof event.text === "string" &&
+			"charts" in event &&
+			Array.isArray(event.charts)
+		) {
+			const charts = event.charts.flatMap((value: unknown) => {
+				const chart = validateChartReference(value);
+				return chart ? [chart] : [];
+			});
+			steps = validateToolSteps("steps" in event ? event.steps : []);
+			onSteps?.(steps);
+			onSnapshot?.(event.text, charts);
+		} else if (event.type === "tool_start" || event.type === "tool_end") {
+			steps = updateToolSteps(steps, event as Record<string, unknown>);
+			onSteps?.(steps);
+		} else if (event.type === "delta" && "text" in event && typeof event.text === "string") onDelta(event.text);
 		else if (event.type === "chart" && "chart" in event) {
 			const chart = validateChartReference(event.chart);
 			if (chart) onChart?.(chart);
 		} else if (event.type === "error" && "message" in event && typeof event.message === "string")
 			throw new Error(event.message);
 		else if (event.type === "done") finished = true;
+		else if (event.type === "cancelled") {
+			cancelled = true;
+			finished = true;
+		}
 	};
 	try {
 		while (true) {
@@ -55,8 +82,18 @@ export async function streamChat(
 		}
 		consume(buffer);
 		if (!finished) throw new Error("模型连接提前结束，可以重新发送问题。");
+		return cancelled ? "cancelled" : "done";
 	} finally {
 		await reader.cancel().catch(() => {});
 		reader.releaseLock();
 	}
+}
+
+export async function cancelChat(requestId: string): Promise<void> {
+	const response = await fetch(`/api/chat/${encodeURIComponent(requestId)}`, {
+		method: "DELETE",
+		headers: { "X-DCMA-Client": "web" },
+		signal: AbortSignal.timeout(10000),
+	});
+	if (!response.ok && response.status !== 404) throw new Error("停止生成失败，请检查本地服务后重试。");
 }
