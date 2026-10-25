@@ -30,7 +30,6 @@ test("展板显示保留0、负数、原始代码并明确缺失值和北京时�
 	assert.equal(displayValue("0000:00:00"), "0000:00:00");
 	assert.equal(displayRaw(0.123456789), "0.123456789");
 	assert.equal(displayRaw(0), "0");
-	assert.match(displayTime("2026-01-14T10:27:24.814Z", false, true), /18:27:24.814/);
 	for (const value of [null, undefined, ""]) assert.equal(displayValue(value), "—");
 	assert.match(displayTime("2026-01-14T10:27:24.814Z"), /18:27:24/);
 	const example = dashboardExample();
@@ -39,6 +38,24 @@ test("展板显示保留0、负数、原始代码并明确缺失值和北京时�
 	assert.ok(example.samples.every((sample, index) => index === 0 || sample.acquiredAt >= example.samples[index - 1].acquiredAt));
 	assert.notEqual(sampleIdentity(example.latest), sampleIdentity(null));
 	assert.match(example.latest!.raw.device_name!, /开发样例/);
+});
+
+test("展板时间统一显示到秒，不四舍五入且保留北京时间和缺失值", () => {
+	for (const fraction of ["000", "814", "999"]) {
+		assert.equal(displayTime(`2026-01-14T08:30:00.${fraction}Z`), "2026/01/14 16:30:00");
+		assert.equal(displayTime(`2026-01-14T08:30:00.${fraction}Z`, true), "16:30:00");
+	}
+	assert.equal(displayTime("2026-01-14T15:59:59.999Z"), "2026/01/14 23:59:59");
+	assert.equal(displayTime("2026-01-14T16:00:00.001Z"), "2026/01/15 00:00:00");
+	for (const value of [null, undefined, ""]) assert.equal(displayTime(value), "—");
+	for (const field of ["timestamp", "time", "create_time"] as const) {
+		assert.equal(displayRawField(field, "16:30:00.000"), "16:30:00");
+		assert.equal(displayRawField(field, "2026-01-14 16:30:00.999"), "2026-01-14 16:30:00");
+		assert.equal(displayRawField(field, "2026-01-14T08:30:00.814Z"), "2026-01-14T08:30:00Z");
+		assert.equal(displayRawField(field, "16:30:00"), "16:30:00");
+		assert.equal(displayRawField(field, null), "—");
+	}
+	assert.equal(displayRawField("timestamp", "1768379400814"), "1768379400814");
 });
 
 test("参考单位只作标注，故障报警零值仅显示0，其他代码和缺失保留", () => {
@@ -84,12 +101,15 @@ test("曲线在缺失点断开，0与负值仍保留且单点可绘制", () => {
 	assert.equal(linePath([{ x: 0, y: null }]), "");
 });
 
-test("异常持续时间保留毫秒并按天、小时、分秒显示", () => {
+test("异常持续时间舍去毫秒并按天、小时、分秒显示", () => {
 	assert.equal(displaySamplingSpan(0), "0 秒");
-	assert.equal(displaySamplingSpan(1250), "1.25 秒");
-	assert.equal(displaySamplingSpan(61250), "1 分 1.25 秒");
+	assert.equal(displaySamplingSpan(999), "0 秒");
+	assert.equal(displaySamplingSpan(1250), "1 秒");
+	assert.equal(displaySamplingSpan(59999), "59 秒");
+	assert.equal(displaySamplingSpan(60001), "1 分");
+	assert.equal(displaySamplingSpan(61250), "1 分 1 秒");
 	assert.equal(displaySamplingSpan(3660000), "1 小时 1 分");
-	assert.equal(displaySamplingSpan(90061001), "1 天 1 小时 1 分 1.001 秒");
+	assert.equal(displaySamplingSpan(90061001), "1 天 1 小时 1 分 1 秒");
 });
 
 test("近期事件按采集时间排序并复用连续代码规则，不修改原始采样", () => {

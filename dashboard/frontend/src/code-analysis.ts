@@ -18,6 +18,7 @@ export function recentCodeHistory(table: DashboardTable, records: DashboardRecor
 }
 
 export function displaySamplingSpan(milliseconds: number): string {
+	milliseconds = Math.floor(milliseconds / 1000) * 1000;
 	const parts: string[] = [];
 	for (const [unit, size] of [["天", 86400000], ["小时", 3600000], ["分", 60000]] as const) {
 		const value = Math.floor(milliseconds / size);

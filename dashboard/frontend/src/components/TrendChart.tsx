@@ -51,7 +51,7 @@ export function TrendChart({ samples, fields, title }: { samples: DashboardSampl
 			context.fillStyle = "white"; context.fillRect(0, 0, canvas.width, canvas.height);
 			context.fillStyle = "#1e293b"; context.font = "bold 26px sans-serif"; context.fillText(title, 40, 40);
 			context.fillStyle = "#64748b"; context.font = "18px sans-serif";
-			context.fillText(`${displayTime(samples[0].acquiredAt, false, true)} ～ ${displayTime(samples.at(-1)!.acquiredAt, false, true)}（北京时间）`, 40, 73);
+			context.fillText(`${displayTime(samples[0].acquiredAt)} ～ ${displayTime(samples.at(-1)!.acquiredAt)}（北京时间）`, 40, 73);
 			fields.forEach((field, index) => {
 				context.fillStyle = svg.querySelectorAll("path")[index]?.getAttribute("stroke") ?? "#2563eb";
 				context.fillText(`${displayFieldLabel(field)}${index ? "（虚线）" : "（实线）"}`, 40 + index * 550, 105);
@@ -72,6 +72,6 @@ export function TrendChart({ samples, fields, title }: { samples: DashboardSampl
 		<LineChart samples={samples} fields={fields} />
 		{error && <p className="notice error" role="alert">{error}</p>}
 		{savedPath && <output className="notice" style={{ overflowWrap: "anywhere" }}>已保存：{savedPath}</output>}
-		{showData && <section className="chart-data-view" id={dataId} aria-label="曲线数据视图"><h3>数据视图 · {samples.length} 条采样</h3><div className="table-scroll"><table><thead><tr><th>采集时间（北京时间）</th>{fields.map((field) => <th key={field}>{displayFieldLabel(field)}</th>)}</tr></thead><tbody>{samples.map((sample) => <tr key={sample.id}><td>{displayTime(sample.acquiredAt, false, true)}</td>{fields.map((field) => <td key={field}>{displayRaw(sample.values[field])}</td>)}</tr>)}</tbody></table></div>{!samples.length && <p className="empty-state">当前曲线暂无采样记录</p>}</section>}
+		{showData && <section className="chart-data-view" id={dataId} aria-label="曲线数据视图"><h3>数据视图 · {samples.length} 条采样</h3><div className="table-scroll"><table><thead><tr><th>采集时间（北京时间）</th>{fields.map((field) => <th key={field}>{displayFieldLabel(field)}</th>)}</tr></thead><tbody>{samples.map((sample) => <tr key={sample.id}><td>{displayTime(sample.acquiredAt)}</td>{fields.map((field) => <td key={field}>{displayRaw(sample.values[field])}</td>)}</tr>)}</tbody></table></div>{!samples.length && <p className="empty-state">当前曲线暂无采样记录</p>}</section>}
 	</div>;
 }

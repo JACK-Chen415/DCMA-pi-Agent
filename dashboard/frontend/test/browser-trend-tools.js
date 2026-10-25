@@ -20,12 +20,24 @@ async (page) => {
 		return { schema: "dcma", table, limit, queriedAt: new Date().toISOString(), latest: records.at(-1) ?? null, sources: [{ table, deviceIndex: motor, kind: "simulation", available: true, latest: records.at(-1) ?? null, message: "验收数据" }], records: [...records].reverse(), samples: records.map(({ id, acquiredAt, values }) => ({ id, acquiredAt, values })), returned: records.length, hasMore: false, truncated: false, warnings: [] };
 	};
 	const routePattern = "**/api/database/dashboard?**";
+	const exportPattern = "**/api/exports";
+	const exportPath = "D:\\DCMA-Agent\\exports\\trend-export.png";
+	let exportedBytes = 0;
+	await page.route(exportPattern, async (route) => {
+		const request = route.request();
+		const bytes = request.postDataBuffer();
+		check(request.method() === "POST" && request.headers()["content-type"] === "image/png", "图表应通过保存接口发送PNG");
+		check(decodeURIComponent(request.headers()["x-dcma-filename"] ?? "").endsWith(".png"), "导出文件名不是PNG");
+		check(bytes && Array.from(bytes.subarray(0, 8)).join(",") === "137,80,78,71,13,10,26,10", "导出内容不是有效PNG");
+		exportedBytes = bytes.length;
+		await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ path: exportPath }) });
+	});
 	await page.route(routePattern, async (route) => {
 		const url = new URL(route.request().url());
 		await route.fulfill({ status: mode === "fail" ? 503 : 200, contentType: "application/json", body: JSON.stringify(mode === "fail" ? { error: "验收查询失败" } : fixture(url.searchParams.get("table"), Number(url.searchParams.get("limit")))) });
 	});
 	try {
-		await page.goto("http://127.0.0.1:3000/#realtime");
+		await page.goto("http://127.0.0.1:3000/dashboard/#realtime");
 		await page.getByRole("heading", { name: "验收电机1", exact: true }).waitFor();
 		const events = page.getByRole("region", { name: "近期事件列表" });
 		check(await events.locator("tbody tr").count() === 2, "连续代码应合并为两个故障/报警事件");
@@ -39,18 +51,16 @@ async (page) => {
 		check(await data.locator("thead th").count() === 3, "数据视图应仅包含时间和当前两项指标");
 		const actual = await data.locator("tbody tr td:last-child").allTextContents();
 		check(JSON.stringify(actual) === JSON.stringify(["0", "—", "-20", "15", "0.123456789"]), "数据视图未保留0、缺失、负数或精度");
-		check((await data.locator("tbody tr").first().innerText()).includes("12:00:00.000"), "数据视图应显示北京时间到毫秒");
+		check((await data.locator("tbody tr td:first-child").first().innerText()).endsWith("12:00:00"), "数据视图应显示北京时间到秒，不含毫秒");
 		for (const width of [1920, 1366, 768, 375]) {
 			await page.setViewportSize({ width, height: 1000 });
 			check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${width}实时页面横向溢出`);
 			await page.screenshot({ path: `output/playwright/trend-tools-${width}.png`, fullPage: true });
 		}
 		await page.setViewportSize({ width: 1366, height: 900 });
-		const downloaded = page.waitForEvent("download");
 		await downloadButton.click();
-		const png = await downloaded;
-		check(png.suggestedFilename().endsWith(".png"), "导出格式不是PNG");
-		await png.saveAs("output/playwright/trend-export.png");
+		await page.getByText(`已保存：${exportPath}`, { exact: true }).waitFor();
+		check(exportedBytes > 8, "保存接口未收到PNG内容");
 		check(await page.getByRole("alert").count() === 0, "图表下载报错");
 		await page.getByRole("button", { name: "放大查看", exact: true }).click();
 		await page.getByRole("button", { name: "退出全屏", exact: true }).waitFor();
@@ -83,12 +93,13 @@ async (page) => {
 		check(await data.locator("tbody tr").count() === 5, "缺失指标仍应显示对应时间记录");
 		check(await page.locator(".chart-surface svg").count() === 0, "全缺失值不应画曲线");
 		check(errors.length === 0, `页面运行错误：${errors.join("；")}`);
-		console.log("PASS: 实时近期事件合并、PNG实际下载、原生全屏与退出、当前曲线数据视图/精度、四档布局、指标/设备切换及失败/空数据/缺失值。");
+		console.log("PASS: 实时近期事件合并、PNG保存请求与路径回显（接口模拟，不含原生窗口落盘）、原生全屏与退出、当前曲线数据视图/精度、四档布局、指标/设备切换及失败/空数据/缺失值。");
 	} finally {
 		if (await page.evaluate(() => !!document.fullscreenElement)) await page.evaluate(() => document.exitFullscreen());
 		await page.unroute(routePattern);
+		await page.unroute(exportPattern);
 		page.off("pageerror", captureError);
 		if (viewport) await page.setViewportSize(viewport);
-		await page.goto("http://127.0.0.1:3000/#realtime");
+		await page.goto("http://127.0.0.1:3000/dashboard/#realtime");
 	}
 }

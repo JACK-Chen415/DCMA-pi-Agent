@@ -12,8 +12,9 @@ export function displayFieldLabel(field: DashboardField): string {
 	return fieldUnits[field] ? `${fieldLabels[field]}（${fieldUnits[field]}）` : fieldLabels[field];
 }
 
-export function displayRawField(_field: DashboardField, value: unknown): string {
-	return displayRaw(value);
+export function displayRawField(field: DashboardField, value: unknown): string {
+	const text = displayRaw(value);
+	return field === "timestamp" || field === "time" || field === "create_time" ? text.replace(/(\d{2}:\d{2}:\d{2})\.\d+/, "$1") : text;
 }
 
 export function codeClassName(field: DashboardField, value: unknown): string | undefined {
@@ -30,9 +31,9 @@ export function displayRaw(value: unknown): string {
 	return value === null || value === undefined || value === "" ? "—" : String(value);
 }
 
-export function displayTime(value: string | null | undefined, timeOnly = false, precise = false): string {
+export function displayTime(value: string | null | undefined, timeOnly = false): string {
 	if (!value) return "—";
-	return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", ...(timeOnly ? {} : { year: "numeric", month: "2-digit", day: "2-digit" }), hour: "2-digit", minute: "2-digit", second: "2-digit", ...(precise ? { fractionalSecondDigits: 3 } : {}), hour12: false }).format(new Date(value));
+	return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", ...(timeOnly ? {} : { year: "numeric", month: "2-digit", day: "2-digit" }), hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(new Date(value));
 }
 
 export function sampleIdentity(record: DashboardRecord | null): string {

@@ -6,7 +6,7 @@
 
 ## 读取与校验
 
-配置必须是普通 UTF-8 JSON 文件，每个文件最多 1 MiB。读取时使用 `O_NOFOLLOW` 拒绝符号链接，并在读取过程中检查字节数。私有运行目录由服务端管理，工具每次查询都会重新读取文件。更新配置时，建议先写入临时文件，再通过原子重命名替换原文件。
+配置必须是普通 UTF-8 JSON 文件，`profiles.json` 最多 1 MiB，`knowledge.json` 最多 8 MiB。读取时使用 `O_NOFOLLOW` 拒绝符号链接，并在读取过程中检查字节数。私有运行目录由服务端管理，工具每次查询都会重新读取文件。更新配置时，建议先写入临时文件，再通过原子重命名替换原文件。
 
 出现以下任一问题，工具都会拒绝配置：未知字段、错误类型、内容超限、设备表重复、知识 ID 重复，或同一条目内的代码类型与代码组合重复。返回的 `ToolInputError` 不包含文件路径或原文。除状态规则 `eq` 接受的原始字符串外，空白字符串均无效；有效字符串按原样保留。
 
@@ -40,9 +40,13 @@
 
 `configured` 表示找到了对应表的配置，`configurationPresent` 表示配置文件存在且通过校验。没有对应表配置时，设备身份和来源返回 `null`。`sourceStatus` 为 `user_provided` 或 `unknown`，`verified` 始终为 `false`。
 
+`getDeviceProfile` 还返回独立的 `codeConventions`：按已确认的 DCMA 采样约定，故障码0为“未报告故障”、报警码0为“未报告报警”；非零码需检索手册，缺失或空白为未知。该返回信息不属于配置文件字段，不代表已配置 `stateRules`，也不解释 `status`、控制字或状态字。零码不能证明设备正在运行、在线或健康。
+
+电机1～4确认为模拟设备后，可运行 `node scripts/configure-simulation-profiles.ts` 初始化四个模拟来源及展板已有单位。该初始化不会填写真实电机型号、额定值、报警阈值或状态规则，也不会覆盖已有 `profiles.json`。配置中型号或规则为 `null` 不表示已填写的单位不可用；文档检索仍可独立执行。
+
 ## knowledge.json
 
-顶层只允许一个 `entries` 数组，最多 500 条。每个条目包含以下字段：
+顶层只允许一个 `entries` 数组，最多 2000 条。每个条目包含以下字段：
 
 | 字段 | 类型与限制 |
 | --- | --- |
@@ -59,7 +63,7 @@
 
 `lookupFaultCode({manufacturer, model, version, code, kind})` 按厂家、型号、版本、代码和代码类型同时精确匹配，区分大小写，不做模糊匹配或版本回退。返回 `configured`、`found`、匹配总数 `total`、是否还有结果的 `hasMore`、`matches` 和 `verified: false`。
 
-每项匹配包含知识 `id`、设备身份、代码 `kind`/`code`/`meaning`/`steps`、知识类型 `entryKind`、`source`、`sourceStatus: "user_provided"` 和 `verified: false`。一次最多返回前 10 项，合计 JSON 不超过 48000 个 UTF-8 字节；每个返回项保留完整说明和步骤。单条超限时也不会截取一部分步骤返回。
+每项匹配包含知识 `id`、设备身份、代码 `kind`/`code`/`meaning`/`steps`、完整条目原文 `text`、知识类型 `entryKind`、`source`、`sourceStatus: "user_provided"` 和 `verified: false`。原文保留驱动对象、原因、处理条件及注意事项。一次最多返回前 10 项，合计 JSON 不超过 48000 个 UTF-8 字节；每个返回项保留完整说明和步骤。单条超限时也不会截取一部分步骤返回。
 
 有匹配但无法放入结果预算时，可能返回空数组和 `hasMore: true`；确实无匹配时同样返回空数组，需结合其他字段区分。多个来源的结果会分别保留。调用者应提示资料冲突和结果截断，不应自行选定一个含义。
 
