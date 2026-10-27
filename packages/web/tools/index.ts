@@ -10,6 +10,7 @@ import {
 	databaseError,
 	getDatabaseCatalog,
 	readAnalysisRows,
+	readCodeEvents,
 	readDashboard,
 	readDatabaseRows,
 } from "../../../dashboard/database/database.ts";
@@ -19,7 +20,8 @@ import {
 	analyzeThresholdEvents,
 	assessDeviceState,
 	checkDataQuality,
-	compareMetricWindows,
+	codeEventsFromWindow,
+	compareMetricSummaries,
 	getCodeEvents,
 	summarizeMetrics,
 } from "./analytics.ts";
@@ -35,6 +37,7 @@ import {
 import { createKnowledgeService } from "./knowledge.ts";
 import { createMonitoringService } from "./monitoring.ts";
 import { createEvidenceStore, exportReport } from "./runtime-files.ts";
+import { loadMetricSummary, type MetricSummary } from "./summary.ts";
 
 const tableSchema = Type.Union(dashboardTables.map((table) => Type.Literal(table)));
 const metricSchema = Type.Union(numericFields.map((field) => Type.Literal(field)));
@@ -133,6 +136,34 @@ export function createIndustrialTools(
 	const windows = new Map<string, Promise<AnalysisWindow>>();
 	const chartSources = new Map<string, ChartSource>();
 	const previewSources = new WeakMap<object, ChartSource>();
+	const summaries = new Map<string, Promise<MetricSummary>>();
+	const profiles = new Map<DashboardTable, ReturnType<typeof services.knowledge.getDeviceProfile>>();
+	const profileFor = (table: DashboardTable) => {
+		let profile = profiles.get(table);
+		if (!profile) {
+			profile = services.knowledge.getDeviceProfile(table);
+			profiles.set(table, profile);
+		}
+		return profile;
+	};
+	const applyUnits = async (result: unknown): Promise<void> => {
+		if (!result || typeof result !== "object") return;
+		const data = result as Record<string, unknown>;
+		if (Array.isArray(data.metrics) && dashboardTables.includes(data.table as DashboardTable)) {
+			const profile = await profileFor(data.table as DashboardTable);
+			const units = new Map(profile.measurements.map((measurement) => [measurement.field, measurement.unit]));
+			const metrics = data.metrics.map((metric: { metric: NumericField }) => ({
+				...metric,
+				unit: units.get(metric.metric) ?? null,
+				unitStatus: units.get(metric.metric) ? "user_configured" : "unknown",
+			}));
+			data.metrics = metrics;
+			data.unitsVerified = metrics.length > 0 && metrics.every((metric) => metric.unit !== null);
+			data.unitSource = profile.source;
+			data.unitBasis = "device_profile";
+		}
+		for (const key of ["a", "b", "statistics"]) await applyUnits(data[key]);
+	};
 	let chartsCreated = 0;
 	const range = (params: { table?: DashboardTable; from: string; to: string }): AnalysisRange => ({
 		table: params.table ?? selectedTable,
@@ -151,9 +182,64 @@ export function createIndustrialTools(
 		}
 		return result;
 	};
+	const codeEventRanges = new Map<string, ReturnType<typeof readCodeEvents>>();
+	/** 故障／报警事件按窗口流式累计，不经过2万行原始明细窗口。 */
+	const codeEventsFor = (
+		params: { table?: DashboardTable; from: string; to: string; page?: number },
+		signal: AbortSignal,
+	) => {
+		const request = { ...validateRange(range(params)), page: params.page ?? 1 };
+		const key = JSON.stringify(request);
+		let result = codeEventRanges.get(key);
+		if (!result) {
+			if (codeEventRanges.size >= 4) throw new ToolInputError("本轮最多分析4个不同窗口，请合并问题或分轮查询。");
+			if (++databaseReads > 8) throw new ToolInputError("本轮数据库读取次数已达到8次上限。");
+			result = readCodeEvents(request, signal);
+			codeEventRanges.set(key, result);
+		}
+		return result;
+	};
 	const databaseRead = async <T>(operation: () => Promise<T>) => {
 		if (++databaseReads > 8) throw new ToolInputError("本轮数据库读取次数已达到8次上限。");
 		return operation();
+	};
+	const summaryFor = async (
+		params: {
+			table?: DashboardTable;
+			from: string;
+			to: string;
+			metrics?: NumericField[];
+			bucketSeconds?: number;
+			condition?: Parameters<typeof loadMetricSummary>[4];
+		},
+		signal: AbortSignal,
+	) => {
+		const request = validateRange(range(params));
+		const metrics = params.metrics ?? defaultMetrics;
+		if (Date.parse(request.to) - Date.parse(request.from) <= 6 * 3600000) {
+			try {
+				return summarizeMetrics(await windowFor(params, signal), metrics, params.bucketSeconds, params.condition);
+			} catch (error) {
+				if (!(error instanceof Error) || error.message !== "ANALYSIS_TOO_LARGE") throw error;
+			}
+		}
+		const key = JSON.stringify({
+			...request,
+			metrics,
+			bucketSeconds: params.bucketSeconds,
+			condition: params.condition,
+		});
+		let pending = summaries.get(key);
+		if (!pending) {
+			if (summaries.size >= 4) throw new ToolInputError("本轮最多分析4个不同聚合请求。");
+			pending = databaseRead(() =>
+				loadMetricSummary(request, metrics, signal, params.bucketSeconds, params.condition),
+			);
+			summaries.set(key, pending);
+		}
+		const result = await pending;
+		previewSources.set(result, { type: "summary", result, units: {} });
+		return result;
 	};
 	async function drawingSource(name: string, params: unknown, result: unknown): Promise<ChartSource | undefined> {
 		if (!result || typeof result !== "object") return undefined;
@@ -171,12 +257,6 @@ export function createIndustrialTools(
 		};
 		const cached = (value: { from: string; to: string }) =>
 			windows.get(JSON.stringify(validateRange(range({ ...value, table: input.table ?? selectedTable }))));
-		if (name === "compare_metric_windows" && input.a && input.b) {
-			const a = await cached(input.a),
-				b = await cached(input.b);
-			if (a && b)
-				return { type: "comparison", windows: [a, b], result: result as ReturnType<typeof compareMetricWindows> };
-		}
 		if (
 			![
 				"check_data_quality",
@@ -244,6 +324,7 @@ export function createIndustrialTools(
 				]);
 				try {
 					const result = await run(params, signal);
+					await applyUnits(result);
 					signal.throwIfAborted();
 					if (Buffer.byteLength(JSON.stringify(result)) > 62000)
 						throw new ToolInputError("结果超过62KB，请减少字段、分组或缩小时间范围；未返回部分统计。");
@@ -438,7 +519,7 @@ export function createIndustrialTools(
 		tool(
 			"summarize_metrics",
 			"时间窗口统计",
-			"程序计算完整有界窗口的采样均值、总体标准差、极值与首末变化率。可按秒分桶；condition可按明确阈值统计严格大于gt或严格小于lt的采样点数，metric须包含在metrics中；不是连续事件次数，不需要采样间隔或持续时间。不是时间加权均值，不外推全库。",
+			"计算完整请求窗口（最多7天）的采样均值、总体标准差、极值与首末变化率；长窗口自动数据库聚合，不受20000条原始明细限制，不要缩成近期窗口。长窗口自带分桶trend（完整数据统计，空桶null），一周默认小时桶；可指定bucketSeconds。condition按gt/lt阈值统计采样点数，metric须包含在metrics中；不是连续事件次数或时间加权均值。",
 			object({
 				...rangeInput,
 				...metricsInput,
@@ -451,13 +532,7 @@ export function createIndustrialTools(
 					}),
 				),
 			}),
-			async (params, signal) =>
-				summarizeMetrics(
-					await windowFor(params, signal),
-					params.metrics ?? defaultMetrics,
-					params.bucketSeconds,
-					params.condition,
-				),
+			async (params, signal) => summaryFor(params, signal),
 		),
 		tool(
 			"compare_metric_windows",
@@ -470,9 +545,28 @@ export function createIndustrialTools(
 				b: object({ from: timeSchema, to: timeSchema }),
 			}),
 			async (params, signal) => {
-				const a = await windowFor({ ...params.a, table: params.table }, signal);
-				const b = await windowFor({ ...params.b, table: params.table }, signal);
-				return compareMetricWindows(a, b, params.metrics ?? defaultMetrics);
+				const a = await summaryFor({ ...params.a, table: params.table, metrics: params.metrics }, signal);
+				const b = await summaryFor({ ...params.b, table: params.table, metrics: params.metrics }, signal);
+				const result = compareMetricSummaries(
+					"trend" in a ? { ...a, trend: undefined } : a,
+					"trend" in b ? { ...b, trend: undefined } : b,
+				);
+				previewSources.set(result, {
+					type: "comparison",
+					result,
+					scopes: [a, b].map((summary) => ({
+						table: summary.table,
+						kind: summary.table === "real_data" ? "acquired" : "simulation",
+						from: summary.from,
+						to: summary.to,
+						queriedAt: summary.queriedAt,
+						firstSampleAt: summary.coverage.firstSampleAt,
+						lastSampleAt: summary.coverage.lastSampleAt,
+						device: "device" in summary ? summary.device : null,
+						preview: false,
+					})),
+				});
+				return result;
 			},
 		),
 		tool(
@@ -485,9 +579,9 @@ export function createIndustrialTools(
 		tool(
 			"get_code_events",
 			"故障与报警事件",
-			"复用展板代码事件算法分析指定窗口。同码连续合并；窗口开始异常起点不确定，未结束不等于当前仍故障。不是厂家代码解释。",
+			"复用展板代码事件算法统计指定窗口（最长7天，数据库端流式累计，不受2万行明细限制）的故障与报警事件。同码连续合并；窗口开始异常起点不确定，未结束不等于当前仍故障。不是厂家代码解释。",
 			object({ ...rangeInput, page: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })) }),
-			async (params, signal) => getCodeEvents(await windowFor(params, signal), params.page),
+			async (params, signal) => getCodeEvents(await codeEventsFor(params, signal)),
 		),
 		tool(
 			"assess_device_state",
@@ -553,7 +647,7 @@ export function createIndustrialTools(
 					profile: await services.knowledge.getDeviceProfile(window.table),
 					quality: checkDataQuality(window, metrics, params.maxGapSeconds),
 					statistics: summarizeMetrics(window, metrics),
-					events: getCodeEvents(window),
+					events: codeEventsFromWindow(window),
 					references,
 					rootCause: "not_confirmed",
 					limitations: ["采样事件不等于独立确认的故障原因", "工况、单位、资料适用性和现场检查仍需确认"],
@@ -585,8 +679,8 @@ export function createIndustrialTools(
 				const source = chartSources.get(record.id);
 				if (!source) throw new ToolInputError("该证据不含可绘图数据，请先取得本轮查询或统计证据。");
 				let drawing = source;
-				if (source.type === "window" || source.type === "preview") {
-					const profile = await services.knowledge.getDeviceProfile(source.window.table);
+				if (source.type === "window" || source.type === "preview" || source.type === "summary") {
+					const profile = await profileFor(source.type === "summary" ? source.result.table : source.window.table);
 					drawing = {
 						...source,
 						units: Object.fromEntries(

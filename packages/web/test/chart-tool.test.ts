@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { EventEmitter } from "node:events";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +18,21 @@ test("drawing reuses the exact query window and enforces evidence ownership and 
 	process.env.MYSQL_PASSWORD = "test";
 	process.env.MYSQL_DATABASE = "dcma";
 	const directory = await mkdtemp(join(tmpdir(), "dcma-chart-tool-"));
+	await writeFile(
+		join(directory, "profiles.json"),
+		JSON.stringify({
+			profiles: [
+				{
+					table: "real_data_01",
+					manufacturer: null,
+					model: null,
+					version: null,
+					source: "synthetic confirmed units",
+					units: { motor_temp: "°C" },
+				},
+			],
+		}),
+	);
 	const dashboardMysql = createRequire(new URL("../../../dashboard/database/database.ts", import.meta.url))(
 		"mysql2/promise",
 	) as typeof Mysql;
@@ -28,7 +44,7 @@ test("drawing reuses the exact query window and enforces evidence ownership and 
 		connection: {
 			execute() {
 				reads++;
-				return {
+				return Object.assign(new EventEmitter(), {
 					stream: () =>
 						Readable.from(
 							[0, 10].map((second) => ({
@@ -40,7 +56,7 @@ test("drawing reuses the exact query window and enforces evidence ownership and 
 								__collection_ms: Date.parse(from) + second * 1000,
 							})),
 						),
-				};
+				});
 			},
 		},
 		async execute() {
@@ -75,11 +91,26 @@ test("drawing reuses the exact query window and enforces evidence ownership and 
 				.filter((item) => item.type === "text")
 				.map((item) => item.text)
 				.join(""),
-		) as { ok: boolean; evidenceId: string; result: { chart: { id: string } } };
+		) as {
+			ok: boolean;
+			evidenceId: string;
+			result: {
+				chart: { id: string };
+				metrics: { metric: string; unit: string | null; unitStatus: string }[];
+				unitsVerified: boolean;
+			};
+		};
 	};
 	try {
 		const query = await invoke("summarize_metrics", { from, to, metrics: ["motor_temp"] });
 		assert.equal(query.ok, true);
+		assert.equal(query.result.metrics[0].unit, "°C");
+		assert.equal(query.result.metrics[0].unitStatus, "user_configured");
+		assert.equal(query.result.unitsVerified, true);
+		const missingUnit = await invoke("summarize_metrics", { from, to, metrics: ["current_actual"] });
+		assert.equal(missingUnit.result.metrics[0].unit, null);
+		assert.equal(missingUnit.result.metrics[0].unitStatus, "unknown");
+		assert.equal(missingUnit.result.unitsVerified, false);
 		for (let index = 0; index < 3; index++) {
 			const result = await invoke("create_analysis_chart", {
 				evidenceId: query.evidenceId,

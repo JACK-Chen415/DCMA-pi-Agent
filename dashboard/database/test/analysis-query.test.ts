@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import test from "node:test";
 import { createPool } from "mysql2/promise";
@@ -21,7 +22,7 @@ test("完整分析窗口使用预处理二进制流，保留与展板一致的FL
 				prepared = true;
 				assert.match(options.sql, /ORDER BY __collection_ms ASC, id ASC LIMIT 20001/);
 				assert.deepEqual(parameters, ["synthetic", "synthetic", Date.parse(timestamp), Date.parse(timestamp)]);
-				return { stream: () => Readable.from([{ id: "1", device_name: "synthetic", inverter_name: "synthetic", timestamp: "2026-10-22 00:00:00", motor_temp: value, __collection_ms: Date.parse(timestamp) }]) };
+				return Object.assign(new EventEmitter(), { stream: () => Readable.from([{ id: "1", device_name: "synthetic", inverter_name: "synthetic", timestamp: "2026-10-22 00:00:00", motor_temp: value, __collection_ms: Date.parse(timestamp) }]) });
 			},
 		},
 		async execute(options: { sql: string }) {

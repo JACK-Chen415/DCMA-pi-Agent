@@ -3,11 +3,13 @@ import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { createCodeHistory } from "../../../dashboard/database/code-events.ts";
 import { normalizeRecord } from "../../../dashboard/database/dashboard-data.ts";
 import {
 	analyzeThresholdEvents,
 	assessDeviceState,
 	checkDataQuality,
+	codeEventsFromWindow,
 	compareMetricWindows,
 	getCodeEvents,
 	summarizeMetrics,
@@ -131,19 +133,58 @@ test("threshold duration uses observed span and recovery is distinct from missin
 });
 
 test("code events distinguish no events from missing fields and missing code observations", () => {
-	const normal = getCodeEvents(window([0, 2, 4]));
+	const normal = codeEventsFromWindow(window([0, 2, 4]));
 	assert.equal(normal.faults, 0);
 	const missing = window([0, 2, 4]);
 	for (const record of missing.records) {
 		record.raw.fault_code = "   ";
 		record.raw.alarm_code = null;
 	}
-	const result = getCodeEvents(missing);
+	const result = codeEventsFromWindow(missing);
 	assert.equal(result.status, "unknown");
 	assert.equal(result.total, null);
 	assert.equal(result.events.length, 0);
 	missing.availableFields = ["motor_temp"];
-	assert.throws(() => getCodeEvents(missing), /缺少/);
+	assert.throws(() => codeEventsFromWindow(missing), /缺少/);
+});
+
+test("streamed code event stats cover full windows beyond the raw row limit", () => {
+	const fixture = window([0, 0, 0]);
+	const history = createCodeHistory({ table: "real_data_01", page: 1, from: fixture.from, to: fixture.to });
+	for (const row of [
+		{ id: 1, timestamp: "2026-10-21 00:00:00", fault_code: "0", alarm_code: "0" },
+		{ id: 2, timestamp: "2026-10-21 00:00:10", fault_code: "0", alarm_code: "A07089" },
+		{ id: 3, timestamp: "2026-10-21 00:00:20", fault_code: "0", alarm_code: "A07089" },
+	])
+		history.add(row);
+	const result = getCodeEvents({
+		table: "real_data_01",
+		from: fixture.from,
+		to: fixture.to,
+		queriedAt: fixture.queriedAt,
+		complete: true,
+		availableFields: ["fault_code", "alarm_code"],
+		excludedIdentityRows: 0,
+		invalidTimeRowsInSource: 0,
+		invalidTimeRecords: 0,
+		timeValidRecords: 3,
+		firstSampleAt: "2026-10-20T16:00:00.000Z",
+		lastSampleAt: "2026-10-20T16:00:20.000Z",
+		history: history.finish(),
+		codeCoverage: [
+			{ field: "fault_code", usable: 3, missing: 0 },
+			{ field: "alarm_code", usable: 3, missing: 0 },
+		],
+	});
+	assert.equal(result.status, "observed");
+	assert.equal(result.faults, 0);
+	assert.equal(result.alarms, 1);
+	assert.equal(result.codes[0].code, "A07089");
+	assert.deepEqual(result.coverage, {
+		firstSampleAt: "2026-10-20T16:00:00.000Z",
+		lastSampleAt: "2026-10-20T16:00:20.000Z",
+		timeValidRecords: 3,
+	});
 });
 
 test("state rules cannot claim current state for historical, stale or ambiguous observations", () => {

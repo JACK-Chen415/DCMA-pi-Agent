@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import { fieldLabels, type NumericField, numericFields } from "../../../dashboard/database/dashboard-types.ts";
 import type { ChartArtifact, ChartColumn, ChartRequest, ChartRow, ChartScope } from "../chart-contracts.ts";
 import { validateChartArtifact } from "../chart-contracts.ts";
-import { type compareMetricWindows, type getCodeEvents, summarizeMetrics } from "./analytics.ts";
+import { type compareMetricSummaries, type getCodeEvents, summarizeMetrics } from "./analytics.ts";
 import { type AnalysisWindow, type ThresholdRule, ToolInputError } from "./contracts.ts";
+import type { MetricSummary } from "./summary.ts";
 
 export type ChartSource =
 	| {
@@ -16,9 +17,11 @@ export type ChartSource =
 	  }
 	| {
 			type: "comparison";
-			windows: [AnalysisWindow, AnalysisWindow];
-			result: ReturnType<typeof compareMetricWindows>;
+			windows?: [AnalysisWindow, AnalysisWindow];
+			scopes?: ChartScope[];
+			result: ReturnType<typeof compareMetricSummaries<{ metrics: MetricSummary["metrics"]; records: number }>>;
 	  }
+	| { type: "summary"; result: MetricSummary; units: Partial<Record<NumericField, string>> }
 	| { type: "code_events"; window: AnalysisWindow; result: ReturnType<typeof getCodeEvents> };
 
 function scope(window: AnalysisWindow, preview = false): ChartScope {
@@ -66,6 +69,12 @@ function sampleLine(rows: ChartRow[], seriesCount: number): ChartRow[] {
 		}
 	}
 	return [...selected].sort((a, b) => a - b).map((index) => rows[index]);
+}
+
+function aggregationLabel(seconds: number, aggregation: "mean" | "min" | "max"): string {
+	const interval =
+		seconds % 3600 === 0 ? `${seconds / 3600}小时` : seconds % 60 === 0 ? `${seconds / 60}分钟` : `${seconds}秒`;
+	return `每${interval}汇总${{ mean: "均值", min: "最小值", max: "最大值" }[aggregation]}`;
 }
 
 export function buildChart(
@@ -130,9 +139,9 @@ export function buildChart(
 				metrics.some((metric) => !source.result.comparisons.some((item) => item.metric === metric))
 			)
 				fail("比较证据不包含所选字段。");
-			artifact.sources = source.windows.map((window) => scope(window));
+			artifact.sources = source.scopes ?? source.windows!.map((window) => scope(window));
 			artifact.request.metrics = metrics;
-			artifact.sourceRecords = source.windows.reduce((sum, window) => sum + window.records.length, 0);
+			artifact.sourceRecords = source.result.a.records + source.result.b.records;
 			artifact.series = metrics.map((metric) => ({ key: metric, label: fieldLabels[metric], unit: null }));
 			artifact.rows = ["A", "B"].map((name) => [
 				name,
@@ -157,6 +166,69 @@ export function buildChart(
 			artifact.notes.push("代码事件次数不等于非零采样点数；事件窗口边界可能不完整。");
 		}
 		artifact.columns.push(...artifact.series.map((item) => ({ ...item, role: "value" as const })));
+	} else if (source.type === "summary") {
+		const summary = source.result;
+		const metrics = request.metrics ?? summary.metrics.slice(0, 4).map((item) => item.metric);
+		if (!["line", "bar"].includes(request.kind))
+			fail("聚合证据仅支持时间趋势或柱状图；散点及直方图需要原始明细，不能用均值伪造分布。");
+		if (
+			!metrics.length ||
+			metrics.length > 4 ||
+			new Set(metrics).size !== metrics.length ||
+			metrics.some(
+				(metric) =>
+					!summary.metrics.some((entry) => entry.metric === metric) || !summary.availableFields.includes(metric),
+			)
+		)
+			fail("聚合证据不包含所选字段。");
+		if (request.bucketSeconds !== undefined && request.bucketSeconds !== summary.bucketSeconds)
+			fail(`当前证据按${summary.bucketSeconds}秒聚合；如需其他精度，请按所需bucketSeconds重新统计同一窗口。`);
+		artifact.sources = [
+			{
+				table: summary.table,
+				kind: summary.table === "real_data" ? "acquired" : "simulation",
+				from: summary.from,
+				to: summary.to,
+				queriedAt: summary.queriedAt,
+				firstSampleAt: summary.coverage.firstSampleAt,
+				lastSampleAt: summary.coverage.lastSampleAt,
+				device: summary.device,
+				preview: false,
+			},
+		];
+		artifact.request.metrics = metrics;
+		artifact.request.bucketSeconds = summary.bucketSeconds;
+		artifact.request.aggregation = request.aggregation ?? "mean";
+		artifact.sourceRecords = summary.records;
+		artifact.series = metrics.map((metric) => ({
+			key: metric,
+			label: fieldLabels[metric],
+			unit: source.units[metric] ?? null,
+		}));
+		artifact.columns = [
+			{ key: "time", label: "汇总时段起点（UTC；界面显示北京时间）", role: "time", unit: null },
+			...artifact.series.flatMap((item) => [
+				{ ...item, role: "value" as const },
+				{ key: `${item.key}_min`, label: `${item.label}最小值`, unit: item.unit, role: "value" as const },
+				{ key: `${item.key}_max`, label: `${item.label}最大值`, unit: item.unit, role: "value" as const },
+			]),
+		];
+		artifact.rows = summary.trend.rows.map((row) => [
+			row[0],
+			...metrics.flatMap((metric) => {
+				const offset = summary.trend.columns.indexOf(`${metric}.mean`);
+				return [
+					row[offset + { mean: 0, min: 1, max: 2 }[artifact.request.aggregation!]],
+					row[offset + 1],
+					row[offset + 2],
+				];
+			}),
+		]);
+		artifact.aggregation = `${aggregationLabel(summary.bucketSeconds, artifact.request.aggregation)} · 全时段采样统计`;
+		artifact.notes.push(
+			"图中展示每个时段汇总后的数值及最小值、最大值，不是逐条采样曲线。没有采样的时段留空，缺失数量见查询证据。",
+			"整体均值与标准差按全部原始采样计算。",
+		);
 	} else {
 		const metrics = request.metrics;
 		if (
@@ -268,7 +340,7 @@ export function buildChart(
 					bucket.from,
 					...bucket.metrics.map((metric) => metric[request.aggregation!]),
 				]);
-				artifact.aggregation = `${request.bucketSeconds}秒分桶 · ${request.aggregation} · 采样点统计`;
+				artifact.aggregation = `${aggregationLabel(request.bucketSeconds, request.aggregation!)} · 采样点统计`;
 			} else {
 				const counts = new Map<string, number>();
 				for (const row of rows) counts.set(row.acquiredAt!, (counts.get(row.acquiredAt!) ?? 0) + 1);

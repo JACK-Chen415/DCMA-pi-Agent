@@ -1,8 +1,34 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chartRequery, chartZoomViewport, createChartOptions } from "../src/chart-options.ts";
+import { chartRequery, chartValue, chartZoomViewport, createChartOptions } from "../src/chart-options.ts";
 import { buildChart } from "../tools/charts.ts";
 import { chartFixture } from "./chart-fixture.ts";
+
+test("chart displays round to at most three decimals without changing stored values", () => {
+	assert.equal(chartValue(0.5965755551060041), "0.597");
+	assert.equal(chartValue(0.3499999940395355), "0.35");
+	assert.equal(chartValue(-12.345678), "-12.346");
+	assert.equal(chartValue(-0.00001), "0");
+	assert.equal(chartValue(0), "0");
+	assert.equal(chartValue(null), "—");
+	assert.equal(chartValue("故障 F1"), "故障 F1");
+	const chart = buildChart(
+		{ evidenceId: "11111111-1111-4111-8111-111111111111", kind: "line", metrics: ["motor_temp"] },
+		chartFixture([0.5965755551060041]),
+	);
+	const before = JSON.stringify(chart);
+	const option = createChartOptions(chart, 800);
+	const tooltip = option.tooltip as { valueFormatter: (value: unknown) => string };
+	assert.equal(tooltip.valueFormatter(0.5965755551060041), "0.597");
+	assert.equal(tooltip.valueFormatter(null), "—");
+	assert.equal(
+		(option.yAxis as { axisLabel: { formatter: (value: number) => string } }[])[0].axisLabel.formatter(
+			0.8500000238418579,
+		),
+		"0.85",
+	);
+	assert.equal(JSON.stringify(chart), before);
+});
 
 test("line options use separate metric panels and missing values stay disconnected", () => {
 	const chart = buildChart(

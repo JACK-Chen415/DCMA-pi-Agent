@@ -2,7 +2,14 @@ import type { EChartsType } from "echarts/core";
 import { ChartNoAxesCombined, Download, Expand, RefreshCw, Table2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { type ChartArtifact, type ChartReference, validateChartArtifact } from "../../chart-contracts.ts";
-import { chartHeight, chartRequery, chartTime, chartZoomViewport, createChartOptions } from "../chart-options.ts";
+import {
+	chartHeight,
+	chartRequery,
+	chartTime,
+	chartValue,
+	chartZoomViewport,
+	createChartOptions,
+} from "../chart-options.ts";
 import { init } from "../chart-render.ts";
 import { type ExportResult, exportResultMessage, saveExportFile } from "../download.ts";
 import { timeToSeconds } from "../time-display.ts";
@@ -254,7 +261,7 @@ export function AnalysisChartCard({
 															? "—"
 															: data.columns[column].role === "time"
 																? chartTime(String(value))
-																: String(value)}
+																: chartValue(value)}
 													</td>
 												))}
 											</tr>

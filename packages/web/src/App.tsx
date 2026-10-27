@@ -61,6 +61,10 @@ export function App() {
 		: live.data?.sources.find((source) => source.table === table)?.message || live.update;
 	const checkedAt = live.data ? new Date(live.data.queriedAt).toLocaleString("zh-CN") : "尚未查询成功";
 	const conversation = workspace.conversations.find((item) => item.id === workspace.activeId);
+	const generatingConversation = workspace.conversations.find((item) =>
+		item.messages.some((message) => message.id === requestId.current),
+	);
+	const isStreaming = busy && generatingConversation?.id === workspace.activeId;
 	const settings = workspace.settings;
 	const followReply = useCallback(
 		async (id: string, assistantId: string, controller: AbortController, payload?: unknown) => {
@@ -228,7 +232,6 @@ export function App() {
 			});
 	};
 	const newChat = () => {
-		stop();
 		setWorkspace((state) => ({ ...state, activeId: null }));
 		setSidebarOpen(false);
 	};
@@ -452,7 +455,6 @@ export function App() {
 				activeId={workspace.activeId}
 				onNewChat={newChat}
 				onSelectConversation={(id) => {
-					stop();
 					const item = workspace.conversations.find((entry) => entry.id === id);
 					setWorkspace((state) => ({ ...state, activeId: id, deviceId: item?.deviceId ?? state.deviceId }));
 					setSidebarOpen(false);
@@ -494,7 +496,7 @@ export function App() {
 				{conversation ? (
 					<ChatView
 						messages={conversation.messages}
-						isStreaming={busy}
+						isStreaming={isStreaming}
 						onRequery={(text) => {
 							void sendMessage(text);
 						}}
@@ -506,13 +508,18 @@ export function App() {
 						}}
 					/>
 				)}
+				{busy && !isStreaming && (
+					<output className="mx-4 text-xs text-slate-500">
+						“{generatingConversation?.title ?? "其他会话"}”正在后台生成，完成后可继续提问；切换会话不会中断。
+					</output>
+				)}
 				<ChatInput
 					key={workspace.activeId ?? "new-chat"}
 					onSendMessage={(text) => {
 						void sendMessage(text);
 					}}
 					disabled={busy}
-					onStop={stop}
+					onStop={isStreaming ? stop : undefined}
 					onImport={openImport}
 				/>
 			</main>
@@ -701,7 +708,7 @@ export function App() {
 						<button
 							type="button"
 							onClick={() => {
-								stop();
+								if (deleteId === generatingConversation?.id) stop();
 								setWorkspace((state) => ({
 									...state,
 									activeId: state.activeId === deleteId ? null : state.activeId,

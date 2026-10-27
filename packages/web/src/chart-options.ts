@@ -9,6 +9,11 @@ import type { ChartArtifact } from "../chart-contracts.ts";
 import { timeToSeconds } from "./time-display.ts";
 
 const colors = ["#2563eb", "#0f766e", "#b45309", "#7c3aed"];
+const numberFormat = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 3, useGrouping: false });
+export function chartValue(value: unknown): string {
+	if (value === null || value === undefined || (typeof value === "number" && !Number.isFinite(value))) return "—";
+	return typeof value === "number" ? numberFormat.format(value).replace(/^-0$/, "0") : String(value);
+}
 export function chartZoomViewport(value: unknown): { start: number; end: number }[] {
 	if (!Array.isArray(value)) return [];
 	return value.map((item: { start?: number; end?: number }) => ({
@@ -67,7 +72,9 @@ export function createChartOptions(chart: ChartArtifact, width: number, exportin
 				hideOverlap: true,
 				...(chart.kind === "line" || (!category && chart.kind === "bar")
 					? { formatter: (value: number) => chartTime(value).slice(6) }
-					: {}),
+					: chart.kind === "scatter"
+						? { formatter: chartValue }
+						: {}),
 				...(category ? { overflow: "truncate", width: width < 500 ? 65 : 110 } : {}),
 			},
 			axisLine: { lineStyle: { color: "#cbd5e1" } },
@@ -81,7 +88,7 @@ export function createChartOptions(chart: ChartArtifact, width: number, exportin
 			nameTextStyle: { color: "#475569", fontSize: 11, align: "left", padding: [0, 0, 0, -35] },
 			nameGap: 17,
 			scale: chart.kind !== "bar" && chart.kind !== "histogram",
-			axisLabel: { fontSize: 10, formatter: (value: number) => Number(value.toPrecision(5)).toString() },
+			axisLabel: { fontSize: 10, formatter: chartValue },
 			splitLine: { lineStyle: { color: "#e8eef5", type: "dashed" } },
 			axisLine: { show: false },
 		});
@@ -107,12 +114,29 @@ export function createChartOptions(chart: ChartArtifact, width: number, exportin
 							silent: true,
 							symbol: "none",
 							lineStyle: { color: "#dc2626", type: "dashed" },
-							label: { formatter: `阈值 ${chart.threshold.value} ${chart.threshold.unit}` },
+							label: { formatter: `阈值 ${chartValue(chart.threshold.value)} ${chart.threshold.unit}` },
 							data: [{ yAxis: chart.threshold.value }],
 						},
 					}
 				: {}),
 		} as SeriesOption);
+		if (chart.kind === "line") {
+			for (const bound of ["min", "max"]) {
+				const column = chart.columns.findIndex((entry) => entry.key === `${item.key}_${bound}`);
+				if (column < 0) continue;
+				series.push({
+					name: chart.columns[column].label,
+					type: "line",
+					xAxisIndex: index,
+					yAxisIndex: index,
+					data: chart.displayRows.map((row) => [Date.parse(String(row[xIndex])), row[column]]),
+					connectNulls: false,
+					showSymbol: false,
+					lineStyle: { width: 1, type: "dotted", opacity: 0.65, color: colors[index] },
+					itemStyle: { color: colors[index] },
+				} as SeriesOption);
+			}
+		}
 		return {
 			left: width < 500 ? 55 : 70,
 			right: 24,
@@ -169,6 +193,7 @@ export function createChartOptions(chart: ChartArtifact, width: number, exportin
 		legend: { top: top + 4, left: 10, type: "scroll", textStyle: { fontSize: 11, color: "#475569" } },
 		tooltip: {
 			trigger: chart.kind === "scatter" ? "item" : "axis",
+			valueFormatter: (value) => (Array.isArray(value) ? value.map(chartValue).join(" / ") : chartValue(value)),
 			...(chart.kind === "scatter"
 				? {
 						formatter: (params: TooltipComponentFormatterCallbackParams) => {
@@ -180,7 +205,7 @@ export function createChartOptions(chart: ChartArtifact, width: number, exportin
 								`采集时间 ${chartTime(String(row[timeIndex]))}（北京时间）`,
 								...[xColumn, chart.columns.find((column) => column.key === chart.series[0].key)!].map(
 									(column) =>
-										`${column.label}：${row[chart.columns.indexOf(column)]}（${column.unit ?? "单位未确认"}）`,
+										`${column.label}：${chartValue(row[chart.columns.indexOf(column)])}（${column.unit ?? "单位未确认"}）`,
 								),
 							].join("\n");
 						},
