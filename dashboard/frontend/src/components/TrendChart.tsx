@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { saveExportFile } from "../../../../packages/web/src/download.ts";
+import { type ExportResult, exportResultMessage, saveExportFile } from "../../../../packages/web/src/download.ts";
 import type { DashboardSample, NumericField } from "../database-types.ts";
 import { displayFieldLabel, displayRaw, displayTime } from "../dashboard-view.ts";
 import { LineChart } from "./LineChart.tsx";
@@ -11,7 +11,7 @@ export function TrendChart({ samples, fields, title }: { samples: DashboardSampl
 	const [fullscreen, setFullscreen] = useState(false);
 	const [downloading, setDownloading] = useState(false);
 	const [error, setError] = useState("");
-	const [savedPath, setSavedPath] = useState("");
+	const [exportResult, setExportResult] = useState<ExportResult | null>(null);
 	const hasValues = samples.some((sample) => fields.some((field) => sample.values[field] !== null));
 	useEffect(() => {
 		const changed = () => setFullscreen(document.fullscreenElement === container.current);
@@ -29,7 +29,7 @@ export function TrendChart({ samples, fields, title }: { samples: DashboardSampl
 	const download = async () => {
 		const svg = container.current?.querySelector(".chart-surface svg");
 		if (!svg || downloading) return;
-		setDownloading(true); setError(""); setSavedPath("");
+		setDownloading(true); setError(""); setExportResult(null);
 		let svgUrl = "";
 		try {
 			const copy = svg.cloneNode(true) as SVGSVGElement;
@@ -58,7 +58,7 @@ export function TrendChart({ samples, fields, title }: { samples: DashboardSampl
 			});
 			context.drawImage(picture, 40, 125, 1520, 387.6);
 			const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((value) => value ? resolve(value) : reject(new Error("PNG unavailable")), "image/png"));
-			setSavedPath(await saveExportFile(`采样趋势-${fields.join("-")}-${Date.now()}.png`, blob));
+			setExportResult(await saveExportFile(`采样趋势-${fields.join("-")}-${Date.now()}.png`, blob));
 		} catch (failure) { setError(failure instanceof Error ? failure.message : "图表保存失败，请重试。"); }
 		finally { if (svgUrl) URL.revokeObjectURL(svgUrl); setDownloading(false); }
 	};
@@ -71,7 +71,7 @@ export function TrendChart({ samples, fields, title }: { samples: DashboardSampl
 		</div>
 		<LineChart samples={samples} fields={fields} />
 		{error && <p className="notice error" role="alert">{error}</p>}
-		{savedPath && <output className="notice" style={{ overflowWrap: "anywhere" }}>已保存：{savedPath}</output>}
+		{exportResult && <output className="notice" style={{ overflowWrap: "anywhere" }}>{exportResultMessage(exportResult)}</output>}
 		{showData && <section className="chart-data-view" id={dataId} aria-label="曲线数据视图"><h3>数据视图 · {samples.length} 条采样</h3><div className="table-scroll"><table><thead><tr><th>采集时间（北京时间）</th>{fields.map((field) => <th key={field}>{displayFieldLabel(field)}</th>)}</tr></thead><tbody>{samples.map((sample) => <tr key={sample.id}><td>{displayTime(sample.acquiredAt)}</td>{fields.map((field) => <td key={field}>{displayRaw(sample.values[field])}</td>)}</tr>)}</tbody></table></div>{!samples.length && <p className="empty-state">当前曲线暂无采样记录</p>}</section>}
 	</div>;
 }

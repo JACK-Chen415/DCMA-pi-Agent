@@ -7,10 +7,11 @@ import { Readable } from "node:stream";
 import test from "node:test";
 import { exportStatusEvent, saveExportFile } from "../src/download.ts";
 import { handleExportHttp } from "../tools/exports.ts";
+import { chooseExportPath } from "../tools/save-dialog.ts";
 
 async function fixture(
 	context: test.TestContext,
-	choose?: (name: string, directory: string) => Promise<string | null>,
+	choose?: (name: string, directory: string) => ReturnType<typeof chooseExportPath>,
 ) {
 	const parent = resolve(".artifacts");
 	await mkdir(parent, { recursive: true });
@@ -119,24 +120,121 @@ test("browser export uses the local save endpoint, reports the actual path and n
 	const messages: string[] = [];
 	target.addEventListener(exportStatusEvent, (event) => messages.push((event as CustomEvent<string>).detail));
 	const fetchToServer = globalThis.fetch;
-	context.mock.method(globalThis, "fetch", (url: string | URL | Request, options?: RequestInit) => {
-		assert.equal(url, "/api/exports");
-		return fetchToServer(f.url, options);
-	});
+	const mockedFetch = context.mock.method(
+		globalThis,
+		"fetch",
+		(url: string | URL | Request, options?: RequestInit) => {
+			assert.equal(url, "/api/exports");
+			return fetchToServer(f.url, options);
+		},
+	);
 	context.mock.method(URL, "createObjectURL", () => {
 		throw new Error("Browser downloads must not be used");
 	});
-	const path = await saveExportFile(
+	const result = await saveExportFile(
 		"report.html",
 		new Blob(["<!doctype html><h1>test</h1>"], { type: "text/html;charset=utf-8" }),
 	);
-	assert.ok(path);
+	assert.equal(result.kind, "saved");
+	assert.ok(result.kind === "saved");
+	const path = result.path;
 	assert.equal(dirname(path), f.directory);
 	assert.match(await readFile(path, "utf8"), /<h1>test/);
 	assert.equal(messages.at(-1), `已保存：${path}`);
 	await assert.rejects(saveExportFile("bad.exe", new Blob(["bad"], { type: "text/plain" })), /文件名或文件类型无效/);
 	assert.match(messages.at(-1) ?? "", /文件名或文件类型无效/);
-	context.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify({ cancelled: true })));
-	assert.equal(await saveExportFile("report.md", new Blob(["report"], { type: "text/markdown" })), "");
+	mockedFetch.mock.mockImplementation(async () => new Response(JSON.stringify({ cancelled: true })));
+	assert.deepEqual(await saveExportFile("report.md", new Blob(["report"], { type: "text/markdown" })), {
+		kind: "cancelled",
+	});
 	assert.equal(messages.at(-1), "已取消保存。");
+});
+
+test("macOS and Linux exports hand off to the browser without opening a native dialog or writing a server file", async (context) => {
+	const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+	context.after(() => Object.defineProperty(process, "platform", original));
+	for (const platform of ["darwin", "linux"]) {
+		Object.defineProperty(process, "platform", { ...original, value: platform });
+		const f = await fixture(context, (name) => chooseExportPath(name, new AbortController().signal));
+		const response = await fetch(f.url, { method: "POST", headers: headers("测试报告.md"), body: "原始内容" });
+		assert.equal(response.status, 200, `${platform} must support exports`);
+		assert.deepEqual(await response.json(), { browserDownload: true });
+		assert.deepEqual(await readdir(f.directory), []);
+		assert.equal((await fetch(f.url, { method: "POST", headers: headers("../outside.md"), body: "x" })).status, 400);
+	}
+});
+
+test("browser downloads preserve filenames and exact text or binary bytes and do not claim a saved disk path", async (context) => {
+	const f = await fixture(context, async () => ({ browserDownload: true }));
+	const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+	const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+	const target = new EventTarget();
+	const messages: string[] = [];
+	target.addEventListener(exportStatusEvent, (event) => messages.push((event as CustomEvent<string>).detail));
+	const originalFetch = globalThis.fetch;
+	const downloads: { name: string; contents: Promise<ArrayBuffer> }[] = [];
+	const links: { removed: boolean }[] = [];
+	const createdUrls: string[] = [];
+	Object.defineProperty(globalThis, "window", { configurable: true, value: target });
+	Object.defineProperty(globalThis, "document", {
+		configurable: true,
+		value: {
+			body: { appendChild() {} },
+			createElement(tag: string) {
+				assert.equal(tag, "a");
+				const link = {
+					href: "",
+					download: "",
+					removed: false,
+					click() {
+						createdUrls.push(this.href);
+						downloads.push({
+							name: this.download,
+							contents: originalFetch(this.href).then((r) => r.arrayBuffer()),
+						});
+					},
+					remove() {
+						this.removed = true;
+					},
+				};
+				links.push(link);
+				return link;
+			},
+		},
+	});
+	context.after(() => {
+		if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow);
+		else Reflect.deleteProperty(globalThis, "window");
+		if (originalDocument) Object.defineProperty(globalThis, "document", originalDocument);
+		else Reflect.deleteProperty(globalThis, "document");
+	});
+	context.mock.method(globalThis, "fetch", (url: string | URL | Request, options?: RequestInit) => {
+		assert.equal(url, "/api/exports");
+		return originalFetch(f.url, options);
+	});
+	const files = [
+		{
+			name: "中文报告.html",
+			type: "text/html;charset=utf-8",
+			bytes: Buffer.from("<!doctype html><h1>温度 -2℃</h1>"),
+		},
+		{ name: "图表.png", type: "image/png", bytes: Buffer.from([137, 80, 78, 71, 0, 255]) },
+		{ name: "数据.csv", type: "text/csv;charset=utf-8", bytes: Buffer.from("时间,温度\n2026-10-27,25") },
+	];
+	for (const file of files) {
+		assert.deepEqual(await saveExportFile(file.name, new Blob([file.bytes], { type: file.type })), {
+			kind: "download",
+			name: file.name,
+		});
+		const downloaded = downloads.at(-1)!;
+		assert.equal(downloaded.name, file.name);
+		assert.deepEqual(Buffer.from(await downloaded.contents), file.bytes);
+		assert.match(messages.at(-1) ?? "", /浏览器.*下载/);
+		assert.doesNotMatch(messages.at(-1) ?? "", /已保存/);
+	}
+	assert.equal(downloads.length, files.length);
+	assert.ok(links.every((link) => link.removed));
+	await new Promise((resolve) => setTimeout(resolve, 1100));
+	for (const url of createdUrls) await assert.rejects(originalFetch(url));
+	assert.deepEqual(await readdir(f.directory), []);
 });

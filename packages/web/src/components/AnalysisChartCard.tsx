@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { type ChartArtifact, type ChartReference, validateChartArtifact } from "../../chart-contracts.ts";
 import { chartHeight, chartRequery, chartTime, chartZoomViewport, createChartOptions } from "../chart-options.ts";
 import { init } from "../chart-render.ts";
-import { saveExportFile } from "../download.ts";
+import { type ExportResult, exportResultMessage, saveExportFile } from "../download.ts";
 import { timeToSeconds } from "../time-display.ts";
 export function AnalysisChartCard({
 	reference,
@@ -22,7 +22,7 @@ export function AnalysisChartCard({
 	const [data, setData] = useState<ChartArtifact | null>(null);
 	const [error, setError] = useState("");
 	const [actionError, setActionError] = useState("");
-	const [savedPath, setSavedPath] = useState("");
+	const [exportResult, setExportResult] = useState<ExportResult | null>(null);
 	const [showData, setShowData] = useState(false),
 		[page, setPage] = useState(0),
 		[exporting, setExporting] = useState(false);
@@ -68,13 +68,13 @@ export function AnalysisChartCard({
 		if (!data || exporting) return;
 		setExporting(true);
 		setActionError("");
-		setSavedPath("");
+		setExportResult(null);
 		let exported: EChartsType | undefined;
 		try {
 			if (format === "csv") {
 				const response = await fetch(`/api/tools/charts/${data.id}.csv`, { signal: AbortSignal.timeout(15000) });
 				if (!response.ok) throw new Error("图表数据不可读取。");
-				setSavedPath(await saveExportFile(`DCMA-${data.kind}-${data.id}.csv`, await response.blob()));
+				setExportResult(await saveExportFile(`DCMA-${data.kind}-${data.id}.csv`, await response.blob()));
 				return;
 			}
 			const zoom = chartZoomViewport(instance.current?.getOption().dataZoom);
@@ -86,7 +86,7 @@ export function AnalysisChartCard({
 			if (zoom) exported.setOption({ dataZoom: zoom });
 			const svg = exported.renderToSVGString();
 			if (format === "svg")
-				setSavedPath(
+				setExportResult(
 					await saveExportFile(
 						`DCMA-${data.kind}-${data.id}.svg`,
 						new Blob([svg], { type: "image/svg+xml;charset=utf-8" }),
@@ -123,7 +123,7 @@ export function AnalysisChartCard({
 					const blob = await new Promise<Blob>((resolve, reject) =>
 						canvas.toBlob((value) => (value ? resolve(value) : reject(new Error("PNG生成失败。"))), "image/png"),
 					);
-					setSavedPath(await saveExportFile(`DCMA-${data.kind}-${data.id}.png`, blob));
+					setExportResult(await saveExportFile(`DCMA-${data.kind}-${data.id}.png`, blob));
 				} finally {
 					URL.revokeObjectURL(svgUrl);
 				}
@@ -221,7 +221,11 @@ export function AnalysisChartCard({
 							</button>
 						)}
 					</div>
-					{savedPath && <output className="block p-3 text-xs text-blue-700 break-all">已保存：{savedPath}</output>}
+					{exportResult && (
+						<output className="block p-3 text-xs text-blue-700 break-all">
+							{exportResultMessage(exportResult)}
+						</output>
+					)}
 					{actionError && (
 						<p role="alert" className="analysis-chart-error">
 							{actionError}

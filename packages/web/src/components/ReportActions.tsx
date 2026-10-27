@@ -1,6 +1,6 @@
 import { Download } from "lucide-react";
 import { useState } from "react";
-import { downloadText, saveExportFile } from "../download.ts";
+import { downloadText, type ExportResult, exportResultMessage, saveExportFile } from "../download.ts";
 import { completeMessageReport, messageReport } from "../report.ts";
 import type { ChatMessage } from "../types.ts";
 import { SpeakButton } from "./SpeakButton";
@@ -8,13 +8,13 @@ import { SpeakButton } from "./SpeakButton";
 export function ReportActions({ message, question }: { message: ChatMessage; question: string }) {
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState("");
-	const [savedPath, setSavedPath] = useState("");
+	const [exportResult, setExportResult] = useState<ExportResult | null>(null);
 	const download = async () => {
 		setBusy(true);
 		setError("");
-		setSavedPath("");
+		setExportResult(null);
 		try {
-			setSavedPath(
+			setExportResult(
 				await saveExportFile(
 					`DCMA-analysis-${message.id}.html`,
 					new Blob([await completeMessageReport(message, question)], { type: "text/html;charset=utf-8" }),
@@ -44,7 +44,9 @@ export function ReportActions({ message, question }: { message: ChatMessage; que
 				</button>
 				<SpeakButton content={message.content} />
 			</div>
-			{savedPath && <output className="block text-xs text-blue-700 mt-2 break-all">已保存：{savedPath}</output>}
+			{exportResult && (
+				<output className="block text-xs text-blue-700 mt-2 break-all">{exportResultMessage(exportResult)}</output>
+			)}
 			{error && (
 				<p role="alert" className="text-xs text-red-700 mt-2">
 					{error}

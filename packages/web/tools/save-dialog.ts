@@ -5,9 +5,12 @@ import { fileURLToPath } from "node:url";
 let initialDirectory = "D:\\";
 let active = false;
 
-/** Only the native dialog can supply a destination; HTTP clients cannot choose a server path. */
-export async function chooseExportPath(name: string, signal: AbortSignal): Promise<string | null> {
-	if (process.platform !== "win32") throw new Error("另存为需要在本机 Windows 服务中使用。");
+/** Windows chooses a server path; other systems let the browser manage the download. */
+export async function chooseExportPath(
+	name: string,
+	signal: AbortSignal,
+): Promise<string | null | { browserDownload: true }> {
+	if (process.platform !== "win32") return { browserDownload: true };
 	if (active) throw new Error("请先完成或取消已打开的另存为窗口。");
 	active = true;
 	try {

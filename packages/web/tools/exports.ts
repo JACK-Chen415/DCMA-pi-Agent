@@ -105,6 +105,10 @@ export async function handleExportHttp(
 			json(200, { cancelled: true });
 			return;
 		}
+		if (typeof path !== "string") {
+			json(200, path);
+			return;
+		}
 		// Write beside the selected file, then replace atomically so failures preserve any existing report.
 		temporary = join(dirname(path), `.dcma-export-${randomUUID()}.tmp`);
 		file = await open(
