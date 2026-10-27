@@ -31,6 +31,16 @@ test("web resources discover four versioned project skills and preload their ful
 	}
 	assert.equal(loader.getAgentsFiles().agentsFiles.length, 0);
 	assert.equal(loader.getExtensions().extensions.length, 0);
+	const faultSkill = skills.find((skill) => skill.name === "fault-investigation");
+	assert.ok(faultSkill);
+	const faultInstructions = readFileSync(faultSkill.filePath, "utf8");
+	assert.match(faultInstructions, /正式异常链路交付/);
+	assert.match(faultInstructions, /直接原因（设备\/部件机制）—条件因素/);
+	assert.match(faultInstructions, /【证据缺口：缺/);
+	assert.match(faultInstructions, /【假设·待验证】/);
+	assert.match(faultInstructions, /【动作不完整/);
+	assert.match(faultInstructions, /【不可关闭】/);
+	assert.match(faultInstructions, /【验证不充分】/);
 });
 
 test("SDK sends skill bodies on real prompt turns without granting file or terminal tools", async () => {
