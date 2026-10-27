@@ -10,8 +10,8 @@ import {
 	X,
 	Zap,
 } from "lucide-react";
-import { statusLabels } from "../mockData.ts";
 import type { Dataset, Device, MetricData } from "../types.ts";
+import { DeviceStateDetails, DeviceStatus } from "./DeviceStatus";
 import { LineChart } from "./LineChart";
 export function RightPanel({
 	device,
@@ -48,7 +48,6 @@ export function RightPanel({
 }) {
 	const temperature = metrics.find((metric) => metric.id === "temperature")?.value;
 	const alarm = !databaseMessage && typeof temperature === "number" && temperature > threshold;
-	const warning = device.status === "warning" || alarm;
 	return (
 		<aside
 			aria-label="设备看板"
@@ -74,13 +73,11 @@ export function RightPanel({
 				/>
 				<div className="flex flex-wrap gap-2 items-center mb-3">
 					<strong className="text-sm">{device.name}</strong>
-					<span
-						className={`text-[11px] px-2 py-1 rounded-full ${warning ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"}`}
-					>
-						{statusLabels[device.status]}
-					</span>
+					<DeviceStatus device={device} />
 					{alarm && <span className="text-[11px] text-red-600">采样温度超阈值</span>}
 				</div>
+				{device.sourceLabel && <p className="text-xs text-slate-500 mb-2">{device.sourceLabel}</p>}
+				<DeviceStateDetails device={device} />
 				<dl className="text-xs grid grid-cols-[64px_1fr] gap-y-2">
 					<dt className="text-slate-500">ID</dt>
 					<dd>{device.code}</dd>

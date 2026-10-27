@@ -12,10 +12,12 @@ import { chartToolEvent } from "./tools/chart-stream.ts";
 import { chatRunIdPattern, createChatRuns } from "./tools/chat-runs.ts";
 import { createChatTimeout } from "./tools/chat-timeout.ts";
 import { createConversationStore, handleConversationHttp } from "./tools/conversation-store.ts";
+import { enrichDeviceStates } from "./tools/device-state.ts";
 import { createEvidenceArchive } from "./tools/evidence-files.ts";
 import { handleExportHttp } from "./tools/exports.ts";
 import { handleToolHttp } from "./tools/http.ts";
 import { createIndustrialServices, createIndustrialTools } from "./tools/index.ts";
+import { createKnowledgeService } from "./tools/knowledge.ts";
 import { createIndustrialResourceLoader } from "./tools/resources.ts";
 import { preparePrivateDirectory } from "./tools/runtime-files.ts";
 import { toolTraceEvent } from "./tools/trace.ts";
@@ -279,7 +281,11 @@ async function api(request: IncomingMessage, response: ServerResponse, path: URL
 }
 
 const dashboardRoot = resolve(root, "../../dashboard/frontend");
-const databaseServer = createDatabaseServer();
+const stateKnowledge = createKnowledgeService(toolDirectory);
+const databaseServer = createDatabaseServer(async (data) => ({
+	...data,
+	sources: await enrichDeviceStates(data.sources, stateKnowledge),
+}));
 let vite: ViteDevServer | undefined;
 let dashboardVite: ViteDevServer | undefined;
 const mimeTypes: Record<string, string> = {

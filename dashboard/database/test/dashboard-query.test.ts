@@ -55,7 +55,12 @@ test("只读查询对缺失表、标识混合、空表与全无效时间明确�
 			}
 			assert.match(options.sql, /ORDER BY __collection_ms DESC, id DESC LIMIT \?/);
 			assert.deepEqual(parameters.slice(0, 2), ["设备A", "变频器A"]);
-			return [[{ id: "2", device_name: "设备A", inverter_name: "变频器A", timestamp: scenario === "invalid" ? "invalid" : "2026-10-10 12:00:00", speed_actual: 0 }]];
+			const row = { id: "2", device_name: "设备A", inverter_name: "变频器A", timestamp: scenario === "invalid" ? "invalid" : "2026-10-10 12:00:00", speed_actual: 0 };
+			if (scenario === "duplicate") {
+				assert.ok(Number(parameters[2]) >= 2, "every source needs two latest records to detect duplicate timestamps");
+				return [[row, { ...row, id: "1" }]];
+			}
+			return [[row]];
 		},
 		destroy() {}, release() {},
 	};
@@ -109,6 +114,9 @@ test("只读查询对缺失表、标识混合、空表与全无效时间明确�
 	scenario = "large";
 	await assert.rejects(readSampleHistory({ table: "real_data_01", limit: 50, page: 1, ...range }), /SAMPLE_HISTORY_TOO_LARGE/);
 	await assert.rejects(readSampleHistory({ table: "real_data_01", limit: 50, page: 1, ...range }, AbortSignal.abort()), /Abort/);
+	scenario = "duplicate";
+	const duplicate = await readDashboard("real_data_01", 50);
+	assert.ok(duplicate.sources.every((source) => source.latestTimestampAmbiguous === true));
 	assert.ok(queries.some((sql) => sql === "START TRANSACTION READ ONLY"));
 	assert.ok(queries.every((sql) => /^(SELECT|START TRANSACTION READ ONLY|COMMIT)/.test(sql)));
 });

@@ -47,6 +47,7 @@ export const statusLabels: Record<Device["status"], string> = {
 	stopped: "已停机",
 	maintenance: "维护中",
 	unknown: "状态未确认",
+	fault: "故障码非零",
 };
 export const defaultSettings: AppSettings = {
 	model: "",

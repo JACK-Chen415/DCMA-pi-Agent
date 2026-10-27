@@ -1,6 +1,6 @@
 import { createServer, type ServerResponse } from "node:http";
 import { databaseError, getDatabaseCatalog, readDatabaseRows, readDashboard, readCodeHistory, readSampleHistory } from "./database.ts";
-import { dashboardTables, type DashboardTable } from "./dashboard-types.ts";
+import { dashboardTables, type DashboardData, type DashboardTable } from "./dashboard-types.ts";
 
 function json(response: ServerResponse, status: number, value: unknown): void {
 	response.writeHead(status, {
@@ -11,7 +11,7 @@ function json(response: ServerResponse, status: number, value: unknown): void {
 	response.end(JSON.stringify(value));
 }
 
-export function createDatabaseServer() {
+export function createDatabaseServer(decorateDashboard?: (data: DashboardData) => Promise<DashboardData>) {
 	return createServer((request, response) => {
 		const host = request.headers.host ?? "";
 		if (!/^(127\.0\.0\.1|localhost):\d+$/.test(host)) {
@@ -76,7 +76,8 @@ export function createDatabaseServer() {
 				response.once("close", () => { if (!response.writableEnded) controller.abort(); });
 				const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]);
 				const data = await readDashboard(table as DashboardTable, limit as 50 | 100 | 200, signal);
-				if (!response.destroyed) json(response, 200, data);
+				const decorated = decorateDashboard ? await decorateDashboard(data) : data;
+				if (!response.destroyed) json(response, 200, decorated);
 				return;
 			}
 			if (path.pathname === "/api/database/catalog") {

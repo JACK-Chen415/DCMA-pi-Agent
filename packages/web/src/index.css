@@ -95,6 +95,16 @@ body {
 .form-control { display: block; width: 100%; margin-top: .5rem; border: 1px solid #cbd5e1; border-radius: .75rem; padding: .65rem; background: #f8fafc; }
 .dialog-shell { width: min(680px, calc(100vw - 24px)); max-height: calc(100dvh - 32px); overflow: auto; }
 .dialog-shell::backdrop { background: rgb(15 23 42 / 40%); backdrop-filter: blur(3px); }
+.dialog-shell.dialog-shell--compact { width: min(480px, calc(100vw - 32px)); padding: 24px; border: 1px solid #e2e8f0; border-radius: 20px; outline: none; }
+.dialog-shell--compact .dialog-heading { align-items: center; border-bottom: 0; padding-bottom: 20px; }
+.dialog-shell--compact .dialog-heading h2 { font-size: 18px; line-height: 28px; }
+.dialog-shell--compact .dialog-content { padding: 0; }
+.dialog-shell--compact .form-control { margin-top: 0; padding: 11px 13px; font-size: 14px; line-height: 22px; background: white; border-radius: 10px; }
+.conversation-dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+.conversation-dialog-actions button { min-height: 40px; padding: 9px 18px; border-radius: 10px; font-size: 14px; font-weight: 500; line-height: 20px; }
+.conversation-dialog-cancel { border: 1px solid #e2e8f0; color: #475569; background: white; }
+.conversation-dialog-cancel:hover { background: #f8fafc; }
+@media (max-width: 480px) { .dialog-shell.dialog-shell--compact { padding: 20px; } }
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid #2563eb; outline-offset: 3px; }
 button:disabled { cursor: not-allowed; }
 .message-actions { display: flex; flex-wrap: wrap; gap: 8px; border-top: 1px solid #e2e8f0; margin-top: 16px; padding-top: 10px; }

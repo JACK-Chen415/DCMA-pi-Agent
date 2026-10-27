@@ -2,6 +2,7 @@ import type {
 	DashboardData,
 	DashboardSource,
 	DashboardTable,
+	DeviceAssessment,
 	NumericField,
 } from "../../../dashboard/database/dashboard-types.ts";
 import type { Dataset, Device, MetricData } from "./types.ts";
@@ -10,7 +11,29 @@ export type { DashboardTable } from "../../../dashboard/database/dashboard-types
 export { dashboardTables } from "../../../dashboard/database/dashboard-types.ts";
 export { useDashboard } from "../../../dashboard/frontend/src/useDashboard.ts";
 
-export function databaseDevice(table: DashboardTable, source?: DashboardSource): Device {
+export function databaseDevice(table: DashboardTable, source?: DashboardSource, error = "", now = Date.now()): Device {
+	let assessment: DeviceAssessment = source?.assessment ?? {
+		state: "unknown",
+		label: "状态未确认",
+		tone: "neutral",
+		detail: "等待取得最新采样及状态评估。",
+		latestAt: source?.latest?.acquiredAt ?? null,
+		assessedAt: new Date(now).toISOString(),
+		expiresAt: null,
+	};
+	const expires = assessment.expiresAt === null ? null : Date.parse(assessment.expiresAt);
+	if (error || (expires !== null && (!Number.isFinite(expires) || now > expires))) {
+		assessment = {
+			...assessment,
+			state: "unknown",
+			tone: "neutral",
+			label: error ? "状态未确认" : "数据已过期",
+			detail: error
+				? `当前状态无法确认：${error}。保留的上次读数不代表当前状态。`
+				: "最新采样超过60秒未更新，不能确认当前状态。",
+			expiresAt: null,
+		};
+	}
 	return {
 		id: table,
 		code: table,
@@ -18,7 +41,9 @@ export function databaseDevice(table: DashboardTable, source?: DashboardSource):
 		type: "未提供",
 		location: "未提供",
 		commissionDate: "未提供",
-		status: "unknown",
+		status: assessment.state,
+		sourceLabel: table === "real_data" ? "历史采集" : "模拟数据",
+		assessment,
 		image: "/assets/gen_photo.png",
 	};
 }

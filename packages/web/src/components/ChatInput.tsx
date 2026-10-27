@@ -1,5 +1,5 @@
 import { Mic, Paperclip, Send, Square } from "lucide-react";
-import { type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { defaultWebKeybindings } from "../keyboard.ts";
 import { checkMicrophoneAccess, startVoiceInput, voiceInputAvailable } from "../speech.ts";
 export function ChatInput({
@@ -74,14 +74,7 @@ export function ChatInput({
 			setPreparing(false);
 		}
 	};
-	const textarea = useRef<HTMLTextAreaElement>(null);
 	const composing = useRef(false);
-	useLayoutEffect(() => {
-		const input = textarea.current;
-		if (!input) return;
-		input.style.height = "28px";
-		if (value) input.style.height = `${Math.min(input.scrollHeight, 128)}px`;
-	}, [value]);
 	const send = () => {
 		if (!value.trim() || disabled || listening) return;
 		onSendMessage(value.trim());
@@ -101,7 +94,7 @@ export function ChatInput({
 	return (
 		<div className="shrink-0 px-3 sm:px-6 pb-4 pt-2">
 			<div className="relative max-w-[800px] mx-auto">
-				<div className="bg-white border border-slate-200 rounded-2xl p-2 flex gap-1 items-end shadow-sm focus-within:border-blue-400">
+				<div className="bg-white border border-slate-200 rounded-2xl p-2 flex gap-1 items-center shadow-sm focus-within:border-blue-400">
 					<button
 						type="button"
 						onClick={onImport}
@@ -111,7 +104,6 @@ export function ChatInput({
 						<Paperclip className="w-4 h-4" />
 					</button>
 					<textarea
-						ref={textarea}
 						aria-label="问题输入"
 						value={value}
 						maxLength={8000}
@@ -126,7 +118,7 @@ export function ChatInput({
 						disabled={disabled || listening}
 						placeholder="输入问题，Enter 发送，Shift+Enter 换行…"
 						rows={1}
-						className="min-w-0 flex-1 bg-transparent outline-none text-sm resize-none px-2 py-1 max-h-32 disabled:opacity-50"
+						className="min-w-0 flex-1 h-9 bg-transparent outline-none text-sm leading-5 resize-none overflow-y-auto px-2 py-2 disabled:opacity-50"
 					/>
 					<button
 						type="button"

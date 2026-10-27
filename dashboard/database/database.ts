@@ -350,8 +350,10 @@ export async function readDashboard(table: DashboardTable, limit: 50 | 100 | 200
 			const [rows] = await connection.execute<RowDataPacket[]>({
 				sql: `SELECT *, ${collectionTimeSql} AS __collection_ms FROM ${qualified}
 				WHERE device_name <=> ? AND inverter_name <=> ? ORDER BY __collection_ms DESC, id DESC LIMIT ?`, timeout: 5000,
-			}, [identities[0].device_name, identities[0].inverter_name, name === table ? limit + 1 : 1]);
+			}, [identities[0].device_name, identities[0].inverter_name, name === table ? limit + 1 : 2]);
 			source.latest = rows[0] ? normalizeRecord(rows[0]) : null;
+			source.latestTimestampAmbiguous = !!source.latest?.acquiredAt && rows.length > 1 &&
+				source.latest.acquiredAt === normalizeRecord(rows[1]).acquiredAt;
 			if (!source.latest?.acquiredAt) source.message = "采集时间无法解析，保留原始记录，不进入时间曲线";
 			if (name === table) { selectedRows = rows.slice(0, limit); hasMore = rows.length > limit; }
 		}

@@ -3,11 +3,13 @@ import { type ReactNode, useEffect, useRef } from "react";
 export function Modal({
 	title,
 	subtitle,
+	size = "default",
 	onClose,
 	children,
 }: {
 	title: string;
 	subtitle?: string;
+	size?: "default" | "compact";
 	onClose: () => void;
 	children: ReactNode;
 }) {
@@ -25,9 +27,9 @@ export function Modal({
 				onClose();
 			}}
 			aria-label={title}
-			className="dialog-shell rounded-3xl p-5 sm:p-6 bg-white text-slate-800 shadow-2xl"
+			className={`dialog-shell${size === "compact" ? " dialog-shell--compact" : ""} rounded-3xl p-5 sm:p-6 bg-white text-slate-800 shadow-2xl`}
 		>
-			<div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-4">
+			<div className="dialog-heading flex items-start justify-between gap-4 border-b border-slate-100 pb-4">
 				<div>
 					<h2 className="text-base font-bold">{title}</h2>
 					{subtitle && <p className="text-xs text-slate-500 mt-1">{subtitle}</p>}
@@ -41,7 +43,7 @@ export function Modal({
 					<X className="w-5 h-5" />
 				</button>
 			</div>
-			<div className="py-4">{children}</div>
+			<div className="dialog-content py-4">{children}</div>
 		</dialog>
 	);
 }

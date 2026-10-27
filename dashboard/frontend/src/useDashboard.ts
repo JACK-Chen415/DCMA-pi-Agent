@@ -22,7 +22,7 @@ export function useDashboard(table: DashboardTable, limit: 50 | 100 | 200, enabl
 			try {
 				const response = await fetch(`/api/database/dashboard?table=${table}&limit=${limit}`, { signal: controller.signal });
 				const body = await response.json();
-				if (!response.ok) throw new Error(body.error || "查询失败，请检查后端服务。");
+				if (!response.ok) throw new Error(body && typeof body === "object" && "error" in body && typeof body.error === "string" ? body.error : "查询失败，请检查后端服务。");
 				const data = body as DashboardData;
 				if (data.table !== table || data.limit !== limit) throw new Error("接口返回的来源与当前选择不一致。");
 				if (!active) return;

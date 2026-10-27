@@ -1,3 +1,4 @@
+import type { DeviceAssessment } from "../../../dashboard/database/dashboard-types.ts";
 import type { ChartReference } from "../chart-contracts.ts";
 import type { ToolStep } from "../interaction-contracts.ts";
 export interface Device {
@@ -7,7 +8,9 @@ export interface Device {
 	type: string;
 	location: string;
 	commissionDate: string;
-	status: "running" | "warning" | "stopped" | "maintenance" | "unknown";
+	status: "running" | "warning" | "stopped" | "maintenance" | "unknown" | "fault";
+	sourceLabel?: string;
+	assessment?: DeviceAssessment;
 	image: string;
 }
 export type MetricKey = "temperature" | "vibration" | "current" | "speed";

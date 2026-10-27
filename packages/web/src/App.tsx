@@ -46,6 +46,10 @@ export function App() {
 		databaseDevice(
 			name,
 			live.data?.sources.find((source) => source.table === name),
+			live.error ||
+				(workspace.offlineDeviceId === name && workspace.datasets[name]?.imported
+					? "当前为离线导入数据，无法确认实时状态"
+					: ""),
 		),
 	);
 	const device = devices.find((item) => item.id === table)!;
@@ -629,7 +633,7 @@ export function App() {
 				</Modal>
 			)}
 			{renameId && (
-				<Modal title="重命名会话" onClose={() => setRenameId(null)}>
+				<Modal title="重命名会话" size="compact" onClose={() => setRenameId(null)}>
 					<form
 						onSubmit={(event) => {
 							event.preventDefault();
@@ -643,40 +647,67 @@ export function App() {
 							setRenameId(null);
 						}}
 					>
+						<div className="flex items-center justify-between gap-3 mb-2">
+							<label htmlFor="conversation-name" className="text-sm font-medium text-slate-700">
+								会话名称
+							</label>
+							<span id="conversation-name-count" className="text-xs tabular-nums text-slate-400">
+								{renameValue.length}/60
+							</span>
+						</div>
 						<input
+							id="conversation-name"
 							className="form-control"
 							aria-label="会话名称"
+							aria-describedby="conversation-name-count"
 							maxLength={60}
 							required
 							value={renameValue}
 							onChange={(event) => setRenameValue(event.target.value)}
 						/>
-						<button className="mt-4 px-4 py-2 rounded-xl bg-blue-600 text-white text-sm" type="submit">
-							保存名称
-						</button>
+						<div className="conversation-dialog-actions">
+							<button className="conversation-dialog-cancel" type="button" onClick={() => setRenameId(null)}>
+								取消
+							</button>
+							<button
+								className="bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40"
+								type="submit"
+								disabled={!renameValue.trim()}
+							>
+								保存
+							</button>
+						</div>
 					</form>
 				</Modal>
 			)}
 			{deleteId && (
-				<Modal title="删除会话" subtitle="请先导出需要保留的记录" onClose={() => setDeleteId(null)}>
-					<p className="text-sm mb-4">
-						删除“{workspace.conversations.find((item) => item.id === deleteId)?.title}”及其消息？
+				<Modal title="删除会话" size="compact" onClose={() => setDeleteId(null)}>
+					<p className="text-sm leading-6 text-slate-600">
+						确定删除以下会话及其所有消息？请先导出需要保留的记录。
 					</p>
-					<button
-						type="button"
-						onClick={() => {
-							stop();
-							setWorkspace((state) => ({
-								...state,
-								activeId: state.activeId === deleteId ? null : state.activeId,
-								conversations: state.conversations.filter((item) => item.id !== deleteId),
-							}));
-							setDeleteId(null);
-						}}
-						className="text-sm bg-red-600 text-white px-4 py-2 rounded-xl"
-					>
-						确认删除
-					</button>
+					<p className="mt-3 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-medium leading-6 text-slate-800 break-words [overflow-wrap:anywhere]">
+						{workspace.conversations.find((item) => item.id === deleteId)?.title}
+					</p>
+					<div className="conversation-dialog-actions">
+						<button className="conversation-dialog-cancel" type="button" onClick={() => setDeleteId(null)}>
+							取消
+						</button>
+						<button
+							type="button"
+							onClick={() => {
+								stop();
+								setWorkspace((state) => ({
+									...state,
+									activeId: state.activeId === deleteId ? null : state.activeId,
+									conversations: state.conversations.filter((item) => item.id !== deleteId),
+								}));
+								setDeleteId(null);
+							}}
+							className="bg-red-600 text-white hover:bg-red-700"
+						>
+							确认删除
+						</button>
+					</div>
 				</Modal>
 			)}
 		</div>

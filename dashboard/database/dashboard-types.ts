@@ -40,6 +40,19 @@ export interface DashboardSource {
 	available: boolean;
 	latest: DashboardRecord | null;
 	message: string;
+	latestTimestampAmbiguous?: boolean;
+	assessment?: DeviceAssessment;
+}
+
+export interface DeviceAssessment {
+	state: "running" | "stopped" | "fault" | "warning" | "unknown";
+	label: string;
+	tone: "neutral" | "info" | "success" | "warning" | "danger";
+	detail: string;
+	latestAt: string | null;
+	assessedAt: string;
+	expiresAt: string | null;
+	ruleSource?: { source: string; version: string };
 }
 export interface DashboardData {
 	schema: "dcma";

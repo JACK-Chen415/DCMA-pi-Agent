@@ -18,6 +18,11 @@ packages/ai/src/providers/.model-generation-*/
 # Private industrial tool configuration, reports, monitoring tasks and observations
 packages/web/.dcma-runtime/
 
+# Local progress notes and personal resume exports
+/周报/
+/未来工作.md
+/output/pdf/
+
 # Editor files
 .vscode/
 .zed/
