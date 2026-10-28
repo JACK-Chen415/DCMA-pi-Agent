@@ -1,6 +1,11 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { createExtensionRuntime, loadSkillsFromDir, type ResourceLoader } from "@earendil-works/pi-coding-agent";
+import {
+	createExtensionRuntime,
+	loadSkillsFromDir,
+	parseFrontmatter,
+	type ResourceLoader,
+} from "@earendil-works/pi-coding-agent";
 import { industrialSystemPrompt } from "./prompt.ts";
 
 export function createIndustrialResourceLoader(): ResourceLoader {
@@ -10,12 +15,20 @@ export function createIndustrialResourceLoader(): ResourceLoader {
 	}
 	loaded.skills.sort((a, b) => a.name.localeCompare(b.name));
 	// The web agent has no file reader; preload these small, repository-owned skills instead of granting file access.
+	const bodyOwners = new Map<string, string>();
 	const instructions = [
 		"以下工业 Skill 正文已加载，无需再读文件。先明确用户想得到的结果，再根据各 Skill 的适用意图选择必要流程；一个请求可组合多个 Skill，共用已有条件与证据。简单问题直接处理，只有会改变结果的关键缺项才澄清；不向用户展示内部意图梳理过程。通用数据与权限规则以系统提示词和工具定义为准，交付前按所选流程的完成标准核对实际结果。",
-		...loaded.skills.map(
-			(skill) =>
-				`<industrial_skill name="${skill.name}">\n${readFileSync(skill.filePath, "utf8").trim()}\n</industrial_skill>`,
-		),
+		...loaded.skills.map((skill) => {
+			const content = readFileSync(skill.filePath, "utf8").trim();
+			const { body } = parseFrontmatter(content);
+			const key = body.replace(/\r\n/g, "\n").trim();
+			const owner = bodyOwners.get(key);
+			bodyOwners.set(key, owner ?? skill.name);
+			const skillInstructions = owner
+				? `${skill.description}\n与已加载的 ${owner} 共用同一工作流及完成标准。`
+				: content;
+			return `<industrial_skill name="${skill.name}">\n${skillInstructions}\n</industrial_skill>`;
+		}),
 	].join("\n\n");
 	return {
 		getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),

@@ -103,9 +103,9 @@ export function createConversationStorage(reportError: (message: string) => void
 		async checkpoint(state: ConversationState) {
 			latest = conversationState(state);
 			if (saving) await saving;
+			const checkpointContent = JSON.stringify(latest);
 			await flush();
-			if (JSON.stringify(latest) !== lastSaved)
-				throw new Error("消息尚未保存，暂未发起生成。请检查本地服务后重新发送。");
+			if (checkpointContent !== lastSaved) throw new Error("消息尚未保存，暂未发起生成。请检查本地服务后重新发送。");
 		},
 		flush,
 		dispose() {

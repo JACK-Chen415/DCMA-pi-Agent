@@ -166,6 +166,46 @@ test("checkpoint saves the reply identity before starting generation and rejects
 	assert.deepEqual((await f.store.read())?.conversations, pending.conversations);
 });
 
+test("a new conversation checkpoint succeeds while another reply advances during the save", async (context) => {
+	const f = await fixture(context);
+	const browser = f.client();
+	await browser.load(empty);
+	const pending = structuredClone(legacy);
+	pending.conversations[0].messages[1].status = "streaming";
+	pending.conversations.push({
+		...structuredClone(pending.conversations[0]),
+		id: "conversation-2",
+		title: "并行问题",
+	});
+	pending.activeId = "conversation-2";
+	let saveStarted!: () => void;
+	const started = new Promise<void>((resolve) => {
+		saveStarted = resolve;
+	});
+	let releaseSave!: () => void;
+	const released = new Promise<void>((resolve) => {
+		releaseSave = resolve;
+	});
+	const fetchToServer = globalThis.fetch;
+	context.mock.method(globalThis, "fetch", async (input: string | URL | Request, options?: RequestInit) => {
+		if (options?.method === "PUT") {
+			saveStarted();
+			await released;
+		}
+		return fetchToServer(input, options);
+	});
+	const checkpoint = browser.checkpoint(pending);
+	await started;
+	const advanced = structuredClone(pending);
+	advanced.conversations[0].messages[1].content = "另一个会话继续生成";
+	browser.update(advanced, true);
+	releaseSave();
+	await checkpoint;
+	assert.deepEqual((await f.store.read())?.conversations[1], pending.conversations[1]);
+	await browser.flush();
+	assert.equal((await f.store.read())?.conversations[0].messages[1].content, "另一个会话继续生成");
+});
+
 test("recovers pending page-close cache only at its matching backend revision", async (context) => {
 	const f = await fixture(context);
 	const saved = await f.store.save({ ...legacy, version: 1, revision: 0 });

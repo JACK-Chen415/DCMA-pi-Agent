@@ -6,6 +6,7 @@ import { type ChartArtifact, validateChartArtifact } from "../chart-contracts.ts
 import { type EvidenceBundle, toolLabels } from "../interaction-contracts.ts";
 import { renderChartSvg } from "./chart-render.ts";
 import { evidenceSummary, loadEvidence } from "./evidence.ts";
+import { remarkKnowledgeLinks } from "./remark-knowledge-links.ts";
 import { remarkLimitations } from "./remark-limitations.ts";
 import { remarkSecondPrecision, timeToSeconds } from "./time-display.ts";
 import type { ChatMessage } from "./types.ts";
@@ -30,7 +31,7 @@ export function analysisReportHtml(
 		createElement(
 			Markdown,
 			{
-				remarkPlugins: [remarkGfm, remarkSecondPrecision, remarkLimitations],
+				remarkPlugins: [remarkGfm, remarkKnowledgeLinks, remarkSecondPrecision, remarkLimitations],
 				skipHtml: true,
 				components: { img: () => null },
 			},

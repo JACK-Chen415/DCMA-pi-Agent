@@ -12,7 +12,7 @@ import { createHarness } from "../../coding-agent/test/suite/harness.ts";
 import { industrialSystemPrompt } from "../tools/prompt.ts";
 import { createIndustrialResourceLoader } from "../tools/resources.ts";
 
-test("web resources discover five versioned project skills and preload their full instructions", () => {
+test("web resources retain five skill entries and preload each shared workflow once", () => {
 	const loader = createIndustrialResourceLoader();
 	const { skills, diagnostics } = loader.getSkills();
 	assert.deepEqual(diagnostics, []);
@@ -26,13 +26,15 @@ test("web resources discover five versioned project skills and preload their ful
 			"work-order-draft",
 		],
 	);
-	const prompt = loader.getAppendSystemPrompt().join("\n\n");
+	const prompt = loader.getAppendSystemPrompt().join("\n\n").replace(/\r\n/g, "\n");
 	for (const skill of skills) {
 		const content = readFileSync(skill.filePath, "utf8").trim();
 		const { frontmatter, body } = parseFrontmatter<{ metadata: { version: string } }>(content);
 		assert.match(frontmatter.metadata.version, /^\d+\.\d+\.\d+$/);
 		assert.ok(body.length > 0);
-		assert.ok(prompt.includes(content));
+		assert.ok(prompt.includes(`<industrial_skill name="${skill.name}">`));
+		assert.ok(prompt.includes(skill.description));
+		assert.equal(prompt.split(body.replace(/\r\n/g, "\n").trim()).length - 1, 1);
 		assert.equal(skill.disableModelInvocation, false);
 	}
 	assert.equal(loader.getAgentsFiles().agentsFiles.length, 0);
@@ -63,6 +65,7 @@ test("web resources discover five versioned project skills and preload their ful
 		normalizeSkillText(faultInstructions.replace(/^description: .*$/m, "description: CLONED")),
 		"RCA Skill must be a clone; the original fault-investigation Skill remains intact",
 	);
+	assert.ok(prompt.includes("与已加载的 fault-investigation 共用同一工作流及完成标准。"));
 });
 
 test("SDK sends skill bodies on real prompt turns without granting file or terminal tools", async () => {
@@ -76,8 +79,11 @@ test("SDK sends skill bodies on real prompt turns without granting file or termi
 	});
 	try {
 		const requests = [
+			"介绍一下电机1的基本信息。",
+			"请帮我生成该设备近一周的报告。",
 			"最近一小时电机温度超过50℃有多少个采样点？",
 			"故障码F30001是什么含义，应该检查什么？",
+			"用rca-evidence-chain整理这次异常的证据链。",
 			"将刚才的分析画成趋势图并导出报告。",
 			"把这次异常整理成待审核工单草稿。",
 		];
@@ -87,7 +93,10 @@ test("SDK sends skill bodies on real prompt turns without granting file or termi
 				const prompt = getCurrentSystemPrompt(context.messages);
 				assert.ok(prompt.includes(industrialSystemPrompt));
 				for (const skill of loader.getSkills().skills) {
-					assert.ok(prompt.includes(readFileSync(skill.filePath, "utf8").trim()));
+					const { body } = parseFrontmatter(readFileSync(skill.filePath, "utf8"));
+					assert.ok(prompt.includes(`<industrial_skill name="${skill.name}">`));
+					assert.ok(prompt.includes(skill.description));
+					assert.equal(prompt.replace(/\r\n/g, "\n").split(body.replace(/\r\n/g, "\n").trim()).length - 1, 1);
 				}
 				assert.deepEqual(getCurrentTools(context.messages), []);
 				observed++;

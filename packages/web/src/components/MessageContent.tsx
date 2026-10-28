@@ -1,6 +1,7 @@
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { downloadSavedFile } from "../download.ts";
+import { remarkKnowledgeLinks } from "../remark-knowledge-links.ts";
 import { remarkLimitations } from "../remark-limitations.ts";
 import { remarkSecondPrecision } from "../time-display.ts";
 
@@ -35,7 +36,7 @@ export function MessageContent({ content }: { content: string }) {
 	return (
 		<div className="message-markdown">
 			<Markdown
-				remarkPlugins={[remarkGfm, remarkSecondPrecision, remarkLimitations]}
+				remarkPlugins={[remarkGfm, remarkKnowledgeLinks, remarkSecondPrecision, remarkLimitations]}
 				components={components}
 				skipHtml
 			>

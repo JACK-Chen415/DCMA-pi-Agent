@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import Markdown from "react-markdown";
 import type { EvidenceBundle } from "../interaction-contracts.ts";
 import { evidenceSections, evidenceSummary } from "../src/evidence.ts";
+import { remarkKnowledgeLinks } from "../src/remark-knowledge-links.ts";
 import { remarkLimitations } from "../src/remark-limitations.ts";
 import { analysisReportHtml, completeMessageReport } from "../src/report.ts";
 import { remarkSecondPrecision, timeToSeconds } from "../src/time-display.ts";
@@ -211,4 +212,33 @@ test("only labelled limitation paragraphs receive smaller typography, including 
 	const html = analysisReportHtml({ ...message, content }, [], null);
 	assert.match(html, /\.answer-limitation\{font-size:12px\}/);
 	assert.equal((html.match(/class="answer-limitation"/g) ?? []).length, 1);
+});
+
+test("visible zoned times become Beijing time while query code and link destinations remain unchanged", () => {
+	const content =
+		"统计 2026-10-21 08:48:28Z 至 2026-10-28T08:48:28.999Z（北京时间）。" +
+		"\n\n跨日 2026-10-28T20:00:00Z，偏移 2026-10-28T16:00:00+08:00，非法日期 2026-02-30T00:00:00Z。" +
+		"\n\n[原始查询](https://example.com/?to=2026-10-28T08:48:28Z)\n\n```json\n2026-10-28T08:48:28.999Z\n```";
+	const html = analysisReportHtml({ ...message, content }, [], null);
+	assert.match(html, /2026-10-21 16:48:28 至 2026-10-28 16:48:28/);
+	assert.match(html, /2026-10-29 04:00:00/);
+	assert.match(html, /偏移 2026-10-28 16:00:00/);
+	assert.match(html, /非法日期 2026-02-30T00:00:00Z/);
+	assert.match(html, /href="https:\/\/example.com\/\?to=2026-10-28T08:48:28Z"/);
+	assert.match(html, /<pre><code class="language-json">2026-10-28T08:48:28\.999Z/);
+	assert.ok(content.includes("2026-10-28T08:48:28.999Z"));
+});
+
+test("knowledge addresses in prose and inline code are clickable in chat rendering and complete reports", () => {
+	const path = "/api/knowledge/context?id=fixture%3A1&code=F30001";
+	const content = `来源：${path}。\n\n\`/api/knowledge/context?id=fixture%3A2\`\n\n[已有来源](/api/knowledge/context?id=fixture%3A3)\n\n\`\`\`text\n/api/knowledge/context?id=raw\n\`\`\`\n\n/api/knowledge/context?limit=1`;
+	const chat = renderToStaticMarkup(createElement(Markdown, { remarkPlugins: [remarkKnowledgeLinks] }, content));
+	const html = analysisReportHtml({ ...message, content }, [], null);
+	for (const rendered of [chat, html]) {
+		assert.equal((rendered.match(/<a href=/g) ?? []).length, 3);
+		assert.match(rendered, /href="\/api\/knowledge\/context\?id=fixture%3A1&amp;code=F30001">查看资料原文/);
+		assert.match(rendered, /href="\/api\/knowledge\/context\?id=fixture%3A2">查看资料原文/);
+		assert.match(rendered, /href="\/api\/knowledge\/context\?id=fixture%3A3">已有来源/);
+		assert.doesNotMatch(rendered, /href="[^"]*(?:id=raw|limit=1)/);
+	}
 });

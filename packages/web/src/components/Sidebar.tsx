@@ -1,4 +1,4 @@
-import { Download, MessageSquare, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Download, LoaderCircle, MessageSquare, Pencil, Plus, Trash2, X } from "lucide-react";
 import type { ConversationItem } from "../types.ts";
 export function Sidebar({
 	conversations,
@@ -60,7 +60,7 @@ export function Sidebar({
 							className="flex gap-2 w-full text-left"
 						>
 							<MessageSquare className="w-4 h-4 text-blue-600 shrink-0 mt-1" />
-							<div className="min-w-0">
+							<div className="min-w-0 flex-1">
 								<p className="truncate text-[13px] font-medium">{item.title}</p>
 								<p className="text-[11px] text-slate-400 mt-1">
 									{new Date(item.time).toLocaleString("zh-CN", {
@@ -71,6 +71,13 @@ export function Sidebar({
 									})}
 								</p>
 							</div>
+							{item.messages.some(
+								(message) => message.role === "assistant" && message.status === "streaming",
+							) && (
+								<output aria-label="正在生成" className="shrink-0 mt-1 text-blue-600">
+									<LoaderCircle aria-hidden="true" className="w-4 h-4 animate-spin" />
+								</output>
+							)}
 						</button>
 						<div className="flex justify-end gap-3 mt-1">
 							<button

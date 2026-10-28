@@ -34,9 +34,7 @@ export function App() {
 	const [renameId, setRenameId] = useState<string | null>(null);
 	const [renameValue, setRenameValue] = useState("");
 	const [deleteId, setDeleteId] = useState<string | null>(null);
-	const [busy, setBusy] = useState(false);
-	const request = useRef<AbortController | null>(null);
-	const requestId = useRef<string | null>(null);
+	const requests = useRef(new Map<string, { controller: AbortController; assistantId: string }>());
 	const fileInput = useRef<HTMLInputElement>(null);
 	const workspaceRef = useRef(workspace);
 	workspaceRef.current = workspace;
@@ -61,14 +59,16 @@ export function App() {
 		: live.data?.sources.find((source) => source.table === table)?.message || live.update;
 	const checkedAt = live.data ? new Date(live.data.queriedAt).toLocaleString("zh-CN") : "尚未查询成功";
 	const conversation = workspace.conversations.find((item) => item.id === workspace.activeId);
-	const generatingConversation = workspace.conversations.find((item) =>
-		item.messages.some((message) => message.id === requestId.current),
+	const generatingConversations = workspace.conversations.filter((item) =>
+		item.messages.some((message) => message.role === "assistant" && message.status === "streaming"),
 	);
-	const isStreaming = busy && generatingConversation?.id === workspace.activeId;
+	const busy = generatingConversations.length > 0;
+	const isStreaming = generatingConversations.some((item) => item.id === workspace.activeId);
 	const settings = workspace.settings;
 	const followReply = useCallback(
 		async (id: string, assistantId: string, controller: AbortController, payload?: unknown) => {
-			const updateReply = (update: (message: ChatMessage) => ChatMessage) =>
+			const updateReply = (update: (message: ChatMessage) => ChatMessage) => {
+				if (requests.current.get(id)?.controller !== controller) return;
 				setWorkspace((state) => ({
 					...state,
 					conversations: state.conversations.map((item) =>
@@ -82,6 +82,7 @@ export function App() {
 							: item,
 					),
 				}));
+			};
 			try {
 				const status = await streamChat(
 					payload,
@@ -108,11 +109,7 @@ export function App() {
 						(controller.signal.aborted ? "" : `\n${error instanceof Error ? error.message : "请求失败"}`),
 				}));
 			} finally {
-				if (request.current === controller) {
-					request.current = null;
-					requestId.current = null;
-					setBusy(false);
-				}
+				if (requests.current.get(id)?.controller === controller) requests.current.delete(id);
 			}
 		},
 		[],
@@ -194,20 +191,24 @@ export function App() {
 			clearInterval(timer);
 		};
 	}, [settings.telemetryIntervalMs]);
-	useEffect(() => () => request.current?.abort(), []);
 	useEffect(() => {
-		if (!historyReady || busy || request.current) return;
+		const active = requests.current;
+		return () => {
+			for (const { controller } of active.values()) controller.abort();
+			active.clear();
+		};
+	}, []);
+	useEffect(() => {
+		if (!historyReady) return;
 		for (const item of workspaceRef.current.conversations) {
+			if (requests.current.has(item.id)) continue;
 			const message = item.messages.find((entry) => entry.status === "streaming" && entry.role === "assistant");
 			if (!message) continue;
 			const controller = new AbortController();
-			request.current = controller;
-			requestId.current = message.id;
-			setBusy(true);
+			requests.current.set(item.id, { controller, assistantId: message.id });
 			void followReply(item.id, message.id, controller);
-			break;
 		}
-	}, [historyReady, busy, followReply]);
+	}, [historyReady, followReply]);
 	useEffect(() => {
 		if (!notice) return;
 		const timer = setTimeout(() => setNotice(""), 7000);
@@ -221,12 +222,11 @@ export function App() {
 		return () => window.removeEventListener(exportStatusEvent, exported);
 	}, []);
 
-	const stop = () => {
-		const controller = request.current;
-		const id = requestId.current;
-		if (!controller || !id) return;
-		void cancelChat(id)
-			.then(() => controller.abort())
+	const stop = (conversationId = workspaceRef.current.activeId) => {
+		const request = conversationId ? requests.current.get(conversationId) : undefined;
+		if (!request) return;
+		void cancelChat(request.assistantId)
+			.then(() => request.controller.abort())
 			.catch((error: unknown) => {
 				setNotice(error instanceof Error ? error.message : "停止生成失败，请重试。");
 			});
@@ -244,7 +244,15 @@ export function App() {
 		}
 	};
 	const sendMessage = async (text: string) => {
-		if (!text.trim() || request.current) return;
+		const workspace = workspaceRef.current;
+		const conversation = workspace.conversations.find((item) => item.id === workspace.activeId);
+		if (
+			!text.trim() ||
+			(conversation &&
+				(requests.current.has(conversation.id) ||
+					conversation.messages.some((message) => message.status === "streaming")))
+		)
+			return;
 		if (workspace.conversations.length >= 50 && !conversation) {
 			setNotice("最多保留 50 个会话，请先导出并删除不需要的会话。");
 			return;
@@ -261,11 +269,9 @@ export function App() {
 		let id = conversation?.id ?? "";
 		let assistantId = "";
 		try {
-			request.current = controller;
-			setBusy(true);
 			id ||= createMessageId();
 			assistantId = createMessageId();
-			requestId.current = assistantId;
+			requests.current.set(id, { controller, assistantId });
 			const now = new Date().toISOString();
 			const userMessage: ChatMessage = {
 				id: createMessageId(),
@@ -358,11 +364,7 @@ export function App() {
 				),
 			}));
 		} finally {
-			if (request.current === controller) {
-				request.current = null;
-				requestId.current = null;
-				setBusy(false);
-			}
+			if (requests.current.get(id)?.controller === controller) requests.current.delete(id);
 		}
 	};
 	const importFile = async (file: File) => {
@@ -510,7 +512,7 @@ export function App() {
 				)}
 				{busy && !isStreaming && (
 					<output className="mx-4 text-xs text-slate-500">
-						“{generatingConversation?.title ?? "其他会话"}”正在后台生成，完成后可继续提问；切换会话不会中断。
+						{generatingConversations.length} 个会话正在后台生成，可在当前会话继续提问。
 					</output>
 				)}
 				<ChatInput
@@ -518,8 +520,8 @@ export function App() {
 					onSendMessage={(text) => {
 						void sendMessage(text);
 					}}
-					disabled={busy}
-					onStop={isStreaming ? stop : undefined}
+					disabled={isStreaming}
+					onStop={isStreaming ? () => stop() : undefined}
 					onImport={openImport}
 				/>
 			</main>
@@ -548,7 +550,7 @@ export function App() {
 					setWorkspace((state) => ({ ...state, offlineDeviceId: undefined }));
 					setNotice("已返回数据库数据；原始上传文件不会被修改");
 				}}
-				disabled={busy}
+				disabled={isStreaming}
 				open={panelOpen}
 				onClose={() => setPanelOpen(false)}
 			/>
@@ -708,7 +710,7 @@ export function App() {
 						<button
 							type="button"
 							onClick={() => {
-								if (deleteId === generatingConversation?.id) stop();
+								stop(deleteId);
 								setWorkspace((state) => ({
 									...state,
 									activeId: state.activeId === deleteId ? null : state.activeId,
