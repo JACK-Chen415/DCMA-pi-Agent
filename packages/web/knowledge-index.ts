@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { faultKnowledgeContext } from "./knowledge-context.ts";
+import { ToolInputError } from "./tools/contracts.ts";
 import {
 	cosineSimilarity,
 	getEmbeddingConfig,
@@ -137,6 +139,12 @@ export async function searchFaultKnowledge(options: SearchOptions = {}) {
 	const limit = Number.isFinite(requestedLimit) ? Math.min(maxLimit, Math.max(1, Math.floor(requestedLimit))) : 8;
 	const queryTokens = tokens(query);
 	const records = await getFaultKnowledgeIndex();
+	const kinds = [...new Set(records.map((item) => item.kind))];
+	const sources = [...new Set(records.map((item) => item.source_id))];
+	if (kind && !kinds.includes(kind))
+		throw new ToolInputError(`kind是资料类型，不是故障或报警类型；允许值：${kinds.join("、")}。请纠正参数后重试，本次未执行检索。`);
+	if (source && !sources.includes(source))
+		throw new ToolInputError(`source须填写来源编号sourceId，不是文件名；允许值：${sources.join("、")}。请纠正参数后重试，本次未执行检索。`);
 	const config = getEmbeddingConfig();
 	let vectorIndex = null;
 	let retrievalNotice: string | undefined;
@@ -176,15 +184,18 @@ export async function searchFaultKnowledge(options: SearchOptions = {}) {
 			(!source || item.source_id === source) &&
 			(!kind || item.kind === kind) &&
 			(!requestedCode || item.codes.some((code) => normalize(code) === normalize(requestedCode))),
-	);
+	).flatMap((item) => {
+		const context = faultKnowledgeContext(records, item, requestedCode);
+		return context ? [{ item, context }] : [];
+	});
 	const ranked = candidates
-		.map((item) => {
+		.map(({ item, context }) => {
 			const lexicalScore = score(item, query, requestedCode);
 			const vector = queryVector ? vectorById.get(item.id) : undefined;
 			const semanticScore = vector && queryVector ? Math.max(0, cosineSimilarity(vector, queryVector)) : 0;
 			const acceptedSemanticScore = semanticScore >= minimumSemanticScore ? semanticScore : 0;
 			const combinedScore = lexicalScore + acceptedSemanticScore * 30;
-			return { item, lexicalScore, semanticScore: acceptedSemanticScore, combinedScore };
+			return { item, context, lexicalScore, semanticScore: acceptedSemanticScore, combinedScore };
 		})
 		.filter((row) => !queryTokens.length || row.combinedScore > 0)
 		.sort((a, b) => b.combinedScore - a.combinedScore || (a.item.page ?? 0) - (b.item.page ?? 0))
@@ -201,7 +212,7 @@ export async function searchFaultKnowledge(options: SearchOptions = {}) {
 		semantic_threshold: minimumSemanticScore,
 		fallback: retrievalNotice ?? null,
 	};
-	return {
+	const response = {
 		query,
 		code: requestedCode || null,
 		id: requestedId || null,
@@ -210,16 +221,18 @@ export async function searchFaultKnowledge(options: SearchOptions = {}) {
 		retrieval,
 		...(retrievalNotice ? { retrieval_notice: retrievalNotice } : {}),
 		count: ranked.length,
+		truncated: false,
+		result_notice: null as string | null,
 		retrieval_log: retrievalLog,
-		results: ranked.map(({ item, lexicalScore, semanticScore, combinedScore }, index) => {
+		results: ranked.map(({ item, context, lexicalScore, semanticScore, combinedScore }, index) => {
 			const citationId = `KB-${String(index + 1).padStart(3, "0")}`;
-			const sourceUrl = `/api/knowledge/context?id=${encodeURIComponent(item.id)}`;
+			const sourceUrl = `/api/knowledge/context?id=${encodeURIComponent(item.id)}${requestedCode ? `&code=${encodeURIComponent(requestedCode)}` : ""}`;
 			return {
-				...item,
+				...context,
 				citation_id: citationId,
 				rank: index + 1,
 				source_url: sourceUrl,
-				citation: `[${citationId}] ${item.source_file}，定位：${item.locator || "未提供"}，页码：${item.page ?? "未提供"}，来源URL：${sourceUrl}`,
+				citation: `[${citationId}] ${context.source_file}，定位：${context.locator || "未提供"}，页码：${context.page ?? "未提供"}，来源URL：${sourceUrl}`,
 				score: combinedScore,
 				combined_score: combinedScore,
 				lexical_score: lexicalScore,
@@ -227,6 +240,15 @@ export async function searchFaultKnowledge(options: SearchOptions = {}) {
 			};
 		}),
 	};
+	// Keep complete, higher-ranked contexts within the tool's 62KB result limit.
+	while (response.results.length && Buffer.byteLength(JSON.stringify(response)) > 60000) {
+		response.results.pop();
+		response.truncated = true;
+		response.result_notice = "跨页资料较长，已按排名减少返回条数；本次不是全部命中结果，可按故障码或来源进一步查询。";
+		response.count = response.results.length;
+		retrievalLog.returned_count = response.count;
+	}
+	return response;
 }
 
 export async function listFaultKnowledgeSources(): Promise<{ sources: FaultKnowledgeSource[]; records: number }> {

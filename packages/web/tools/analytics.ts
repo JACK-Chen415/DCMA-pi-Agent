@@ -279,6 +279,12 @@ export function summarizeMetrics(
 	return {
 		...scope(window),
 		missingFields: metrics.filter((field) => !window.availableFields.includes(field)),
+		analysisScope: {
+			completeMeaning: "完整查询所选时段，不代表连续采样；指标无缺值不代表时间上无断点。",
+			samplingContinuity: "not_checked",
+			eventAlignment: "not_checked",
+			note: "本结果未按报警时段对齐指标，不能判断报警期间指标是否偏离；汇总趋势只能说明对应汇总尺度的变化，不能排除更短时段的升温或跳变。",
+		},
 		records: data.rows.length,
 		metrics: metrics.map((metric) => statistics(data.rows, data.counts, metric)),
 		condition: condition
@@ -471,6 +477,7 @@ export function getCodeEvents(stats: CodeEventStats) {
 	const page = result.page;
 	const anyUsable = codeCoverage.some((item) => item.usable > 0);
 	const codeCount = result.codes.length;
+	const eventStarts = result.events.map((event) => event.startedAt).sort();
 	let codeTextTruncated = false;
 	const boundCode = (code: string) => {
 		if (code.length > 128) codeTextTruncated = true;
@@ -502,9 +509,24 @@ export function getCodeEvents(stats: CodeEventStats) {
 		total: anyUsable ? result.total : null,
 		open: anyUsable ? result.open : null,
 		events: result.events.map((event) => ({ ...event, code: boundCode(event.code) })),
-		codes: result.codes
-			.slice(0, 100)
-			.map((entry) => ({ ...entry, code: boundCode(entry.code), durationMs: finite(entry.durationMs) })),
+		codes: result.codes.slice(0, 100).map((entry) => ({
+			...entry,
+			code: boundCode(entry.code),
+			durationMs: finite(entry.durationMs),
+			observedDurationMinutes: finite(entry.durationMs / 60000),
+			meanObservedDurationMinutes: entry.count > 0 ? finite(entry.durationMs / entry.count / 60000) : null,
+		})),
+		eventDetailScope: {
+			returned: result.events.length,
+			total: anyUsable ? result.total : null,
+			coversAllEvents: anyUsable ? result.events.length === result.total : null,
+			firstStartedAt: eventStarts[0] ?? null,
+			lastStartedAt: eventStarts.at(-1) ?? null,
+			note: "总数和各代码累计观察跨度来自所查窗口汇总；events仅为当前页，firstStartedAt/lastStartedAt为本页事件起点范围。明细时长和间隔只支持本页特征，平均值不能证明每次同长或严格周期；摘要、图注和建议中每次提及规律都保留本页范围，不能据周期推断配置原因。",
+		},
+		metricAlignment: "not_performed",
+		durationMeaning:
+			"观察跨度沿用代码事件口径：结束观察（未结束时为末次观察）减开始观察，不等于停机时长；正文用分钟或小时，原始毫秒留在证据中。",
 		codeCount,
 		codesTruncated: codeCount > 100,
 		codeTextTruncated,

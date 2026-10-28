@@ -48,7 +48,7 @@ test("comparison and code bar charts preserve program-calculated category meanin
 	}
 	const codes = buildChart(
 		{ evidenceId: base.evidenceId, kind: "bar" },
-		{ type: "code_events", window: a.window, result: codeEventsFromWindow(a.window) },
+		{ type: "code_events", result: codeEventsFromWindow(a.window) },
 	);
 	assert.deepEqual(codes.rows, [["故障 F1", 1]]);
 	assert.throws(
@@ -57,7 +57,6 @@ test("comparison and code bar charts preserve program-calculated category meanin
 				{ evidenceId: base.evidenceId, kind: "bar" },
 				{
 					type: "code_events",
-					window: a.window,
 					result: { ...codeEventsFromWindow(a.window), codesTruncated: true },
 				},
 			),

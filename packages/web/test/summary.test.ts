@@ -146,6 +146,9 @@ test("week statistics cover all rows, preserve empty buckets/extrema, and charts
 	assert.equal(response.result.metrics[0].mean, mean);
 	assert.equal((response.result.metrics[0] as unknown as { unit: string }).unit, "°C");
 	assert.equal(response.result.unitsVerified, true);
+	assert.equal(response.result.complete, true);
+	assert.equal(response.result.analysisScope.samplingContinuity, "not_checked");
+	assert.equal(response.result.analysisScope.eventAlignment, "not_checked");
 	assert.notEqual(response.result.metrics[0].mean, (2 + 10) / 2);
 	assert.equal(response.result.metrics[0].missing, 1);
 	assert.equal(response.result.metrics[0].zeros, 1);
@@ -239,6 +242,7 @@ test("week statistics cover all rows, preserve empty buckets/extrema, and charts
 	assert.equal(result.metrics[0].min, null);
 	assert.equal(result.metrics[0].first, null);
 	assert.ok(result.trend.rows.every((row) => row[3] === null));
+	assert.equal(result.analysisScope.samplingContinuity, "not_checked");
 	await assert.rejects(
 		readMetricAggregates({ table: "real_data_01", from, to, metrics: ["injected" as never], bucketSeconds: 3600 }),
 		/INVALID_AGGREGATION/,

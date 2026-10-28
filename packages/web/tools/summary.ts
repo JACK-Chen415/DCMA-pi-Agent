@@ -30,6 +30,12 @@ export async function loadMetricSummary(
 		device: data.device,
 		queriedAt: data.queriedAt,
 		complete: true as const,
+		analysisScope: {
+			completeMeaning: "完整查询所选时段，不代表连续采样；指标无缺值不代表时间上无断点。",
+			samplingContinuity: "not_checked",
+			eventAlignment: "not_checked",
+			note: "本结果未按报警时段对齐指标，不能判断报警期间指标是否偏离；汇总趋势只能说明对应汇总尺度的变化，不能排除更短时段的升温或跳变。",
+		},
 		sampled: false,
 		calculation: "mysql_aggregate_v1",
 		snapshot: "single_read_only_transaction",

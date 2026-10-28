@@ -22,7 +22,7 @@ export type ChartSource =
 			result: ReturnType<typeof compareMetricSummaries<{ metrics: MetricSummary["metrics"]; records: number }>>;
 	  }
 	| { type: "summary"; result: MetricSummary; units: Partial<Record<NumericField, string>> }
-	| { type: "code_events"; window: AnalysisWindow; result: ReturnType<typeof getCodeEvents> };
+	| { type: "code_events"; result: ReturnType<typeof getCodeEvents> };
 
 function scope(window: AnalysisWindow, preview = false): ChartScope {
 	const sorted = window.records
@@ -155,8 +155,20 @@ export function buildChart(
 			if (request.metrics?.length) fail("代码事件柱状图不接受数值测点；省略metrics。");
 			if (source.result.codesTruncated || source.result.codeTextTruncated)
 				fail("代码类别或文本已截断，请缩小查询范围后重新绘图。");
-			artifact.sources = [scope(source.window)];
-			artifact.sourceRecords = source.window.records.length;
+			artifact.sources = [
+				{
+					table: source.result.table,
+					kind: source.result.table === "real_data" ? "acquired" : "simulation",
+					from: source.result.from,
+					to: source.result.to,
+					queriedAt: source.result.queriedAt,
+					firstSampleAt: source.result.coverage.firstSampleAt,
+					lastSampleAt: source.result.coverage.lastSampleAt,
+					device: null,
+					preview: false,
+				},
+			];
+			artifact.sourceRecords = source.result.coverage.timeValidRecords;
 			artifact.series = [{ key: "count", label: "已观测事件次数", unit: "次" }];
 			artifact.rows = source.result.codes.map((item) => [
 				`${item.field === "fault_code" ? "故障" : "报警"} ${item.code}`,
