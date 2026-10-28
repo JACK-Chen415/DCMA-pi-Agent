@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { test } from "node:test";
 import { Readable } from "node:stream";
 import { createPool } from "mysql2/promise";
@@ -23,7 +24,7 @@ test("只读查询对缺失表、标识混合、空表与全无效时间明确�
 			assert.match(options.sql, /ORDER BY __collection_ms ASC, id ASC/);
 			assert.doesNotMatch(options.sql, /LIMIT/);
 			assert.deepEqual(parameters, ["设备A", "变频器A"]);
-			return { stream: () => Readable.from([{ id: "1", timestamp: scenario === "invalid" ? "invalid" : "2026-10-10 12:00:00", fault_code: "F1", alarm_code: 0 }, { id: "2", timestamp: scenario === "invalid" ? "invalid" : "2026-10-10 12:01:00", fault_code: 0, alarm_code: 0 }]) };
+			return Object.assign(new EventEmitter(), { stream: () => Readable.from([{ id: "1", timestamp: scenario === "invalid" ? "invalid" : "2026-10-10 12:00:00", fault_code: "F1", alarm_code: 0 }, { id: "2", timestamp: scenario === "invalid" ? "invalid" : "2026-10-10 12:01:00", fault_code: 0, alarm_code: 0 }]) });
 		} },
 		async query(options: { sql: string }) {
 			queries.push(options.sql);

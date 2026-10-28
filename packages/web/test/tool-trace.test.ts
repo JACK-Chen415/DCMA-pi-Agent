@@ -70,6 +70,38 @@ test("unrelated stream events do not become tool traces", () => {
 	assert.equal(toolTraceEvent({ type: "message_update", text: "DO_NOT_LEAK" }), null);
 });
 
+test("failure envelope keeps a bounded reason for the step list", () => {
+	const event = toolTraceEvent({
+		type: "tool_execution_end",
+		toolName: "get_code_events",
+		toolCallId: "call-4",
+		isError: true,
+		durationMs: 3,
+		result: {
+			content: [
+				{
+					type: "text",
+					text: JSON.stringify({
+						ok: false,
+						error: "所选窗口超过20000行或16MB，请缩小范围；没有返回部分统计。",
+						noUsableResult: true,
+					}),
+				},
+			],
+		},
+	});
+	assert.equal(event?.ok, false);
+	assert.equal(event?.error, "所选窗口超过20000行或16MB，请缩小范围；没有返回部分统计。");
+	const long = toolTraceEvent({
+		type: "tool_execution_end",
+		toolName: "get_code_events",
+		toolCallId: "call-5",
+		isError: true,
+		result: { content: [{ type: "text", text: JSON.stringify({ ok: false, error: "长".repeat(500) }) }] },
+	});
+	assert.equal(String(long?.error).length, 200);
+});
+
 test("trace preserves explicit timezone offsets for semantic acceptance checks", () => {
 	const event = toolTraceEvent({
 		type: "tool_execution_start",

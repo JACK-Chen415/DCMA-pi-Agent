@@ -13,6 +13,7 @@ import { WelcomeView } from "./components/WelcomeView";
 import { createConversationStorage } from "./conversation-storage.ts";
 import { dashboardTables, databaseDataset, databaseDevice, databaseMetrics, useDashboard } from "./dashboard-data.ts";
 import { downloadText, exportStatusEvent } from "./download.ts";
+import { createMessageId } from "./message-id.ts";
 import { loadWorkspace, storageKey } from "./storage.ts";
 import { getMetrics, parseTelemetry, telemetryCsv } from "./telemetry.ts";
 import type { AppSettings, BackendStatus, ChatMessage } from "./types.ts";
@@ -60,6 +61,10 @@ export function App() {
 		: live.data?.sources.find((source) => source.table === table)?.message || live.update;
 	const checkedAt = live.data ? new Date(live.data.queriedAt).toLocaleString("zh-CN") : "尚未查询成功";
 	const conversation = workspace.conversations.find((item) => item.id === workspace.activeId);
+	const generatingConversation = workspace.conversations.find((item) =>
+		item.messages.some((message) => message.id === requestId.current),
+	);
+	const isStreaming = busy && generatingConversation?.id === workspace.activeId;
 	const settings = workspace.settings;
 	const followReply = useCallback(
 		async (id: string, assistantId: string, controller: AbortController, payload?: unknown) => {
@@ -227,7 +232,6 @@ export function App() {
 			});
 	};
 	const newChat = () => {
-		stop();
 		setWorkspace((state) => ({ ...state, activeId: null }));
 		setSidebarOpen(false);
 	};
@@ -254,48 +258,52 @@ export function App() {
 			return;
 		}
 		const controller = new AbortController();
-		request.current = controller;
-		setBusy(true);
-		const id = conversation?.id ?? crypto.randomUUID();
-		const assistantId = crypto.randomUUID();
-		requestId.current = assistantId;
-		const now = new Date().toISOString();
-		const userMessage: ChatMessage = {
-			id: crypto.randomUUID(),
-			role: "user",
-			content: text.trim(),
-			timestamp: now,
-			status: "done",
-		};
-		const assistant: ChatMessage = {
-			id: assistantId,
-			role: "assistant",
-			content: "",
-			timestamp: now,
-			status: "streaming",
-			engine: `DCMA Agent · ${settings.model}`,
-		};
-		const next = {
-			...workspace,
-			activeId: id,
-			conversations: conversation
-				? workspace.conversations.map((item) =>
-						item.id === id ? { ...item, time: now, messages: [...item.messages, userMessage, assistant] } : item,
-					)
-				: [
-						{
-							id,
-							title: text.trim().slice(0, 28),
-							time: now,
-							deviceId: device.id,
-							messages: [userMessage, assistant],
-						},
-						...workspace.conversations,
-					],
-		};
-		workspaceRef.current = next;
-		setWorkspace(next);
+		let id = conversation?.id ?? "";
+		let assistantId = "";
 		try {
+			request.current = controller;
+			setBusy(true);
+			id ||= createMessageId();
+			assistantId = createMessageId();
+			requestId.current = assistantId;
+			const now = new Date().toISOString();
+			const userMessage: ChatMessage = {
+				id: createMessageId(),
+				role: "user",
+				content: text.trim(),
+				timestamp: now,
+				status: "done",
+			};
+			const assistant: ChatMessage = {
+				id: assistantId,
+				role: "assistant",
+				content: "",
+				timestamp: now,
+				status: "streaming",
+				engine: `DCMA Agent · ${settings.model}`,
+			};
+			const next = {
+				...workspace,
+				activeId: id,
+				conversations: conversation
+					? workspace.conversations.map((item) =>
+							item.id === id
+								? { ...item, time: now, messages: [...item.messages, userMessage, assistant] }
+								: item,
+						)
+					: [
+							{
+								id,
+								title: text.trim().slice(0, 28),
+								time: now,
+								deviceId: device.id,
+								messages: [userMessage, assistant],
+							},
+							...workspace.conversations,
+						],
+			};
+			workspaceRef.current = next;
+			setWorkspace(next);
 			await historyStorage.current?.checkpoint(next);
 			controller.signal.throwIfAborted();
 			const databasePreferred = !offline || settings.databaseEnabled !== false;
@@ -329,6 +337,7 @@ export function App() {
 					.map(({ role, content }) => ({ role, content: content.slice(0, 8000) })),
 			});
 		} catch (error) {
+			setNotice(error instanceof Error ? error.message : "消息发送失败，请重试。");
 			setWorkspace((state) => ({
 				...state,
 				conversations: state.conversations.map((item) =>
@@ -446,7 +455,6 @@ export function App() {
 				activeId={workspace.activeId}
 				onNewChat={newChat}
 				onSelectConversation={(id) => {
-					stop();
 					const item = workspace.conversations.find((entry) => entry.id === id);
 					setWorkspace((state) => ({ ...state, activeId: id, deviceId: item?.deviceId ?? state.deviceId }));
 					setSidebarOpen(false);
@@ -488,7 +496,7 @@ export function App() {
 				{conversation ? (
 					<ChatView
 						messages={conversation.messages}
-						isStreaming={busy}
+						isStreaming={isStreaming}
 						onRequery={(text) => {
 							void sendMessage(text);
 						}}
@@ -500,13 +508,18 @@ export function App() {
 						}}
 					/>
 				)}
+				{busy && !isStreaming && (
+					<output className="mx-4 text-xs text-slate-500">
+						“{generatingConversation?.title ?? "其他会话"}”正在后台生成，完成后可继续提问；切换会话不会中断。
+					</output>
+				)}
 				<ChatInput
 					key={workspace.activeId ?? "new-chat"}
 					onSendMessage={(text) => {
 						void sendMessage(text);
 					}}
 					disabled={busy}
-					onStop={stop}
+					onStop={isStreaming ? stop : undefined}
 					onImport={openImport}
 				/>
 			</main>
@@ -695,7 +708,7 @@ export function App() {
 						<button
 							type="button"
 							onClick={() => {
-								stop();
+								if (deleteId === generatingConversation?.id) stop();
 								setWorkspace((state) => ({
 									...state,
 									activeId: state.activeId === deleteId ? null : state.activeId,

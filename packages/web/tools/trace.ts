@@ -114,5 +114,10 @@ export function toolTraceEvent(value: unknown): Record<string, unknown> | null {
 				: null,
 		durationMs: typeof event.durationMs === "number" && Number.isFinite(event.durationMs) ? event.durationMs : null,
 		summary,
+		// 失败原因供前端步骤列表展示；截断避免把长错误带进界面与历史记录。
+		error:
+			payload?.ok === false && typeof payload.error === "string" && payload.error.trim()
+				? payload.error.trim().slice(0, 200)
+				: null,
 	};
 }

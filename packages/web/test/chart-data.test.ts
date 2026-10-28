@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { validateChartArtifact } from "../chart-contracts.ts";
-import { compareMetricWindows, getCodeEvents } from "../tools/analytics.ts";
+import { codeEventsFromWindow, compareMetricWindows } from "../tools/analytics.ts";
 import { buildChart } from "../tools/charts.ts";
 import { chartFixture } from "./chart-fixture.ts";
 
@@ -48,14 +48,18 @@ test("comparison and code bar charts preserve program-calculated category meanin
 	}
 	const codes = buildChart(
 		{ evidenceId: base.evidenceId, kind: "bar" },
-		{ type: "code_events", window: a.window, result: getCodeEvents(a.window) },
+		{ type: "code_events", window: a.window, result: codeEventsFromWindow(a.window) },
 	);
 	assert.deepEqual(codes.rows, [["故障 F1", 1]]);
 	assert.throws(
 		() =>
 			buildChart(
 				{ evidenceId: base.evidenceId, kind: "bar" },
-				{ type: "code_events", window: a.window, result: { ...getCodeEvents(a.window), codesTruncated: true } },
+				{
+					type: "code_events",
+					window: a.window,
+					result: { ...codeEventsFromWindow(a.window), codesTruncated: true },
+				},
 			),
 		/截断/,
 	);

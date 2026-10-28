@@ -119,7 +119,7 @@ export function validateChartArtifact(value: unknown): ChartArtifact {
 	if (
 		!Array.isArray(value.columns) ||
 		value.columns.length < 2 ||
-		value.columns.length > 8 ||
+		value.columns.length > 13 ||
 		!value.columns.every(
 			(column: unknown) =>
 				record(column) &&

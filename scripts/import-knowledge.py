@@ -25,6 +25,10 @@ DOCUMENTS = [
     ("0.75kW与1.5kW电机对拖试验故障模拟实施方案（YFB801-2+90L-4）.docx",
      "方案涉及多厂家", "YFB801-2 + 90L-4 / CU250 + PM240", "原文未标注版本", "case"),
 ]
+SOURCE_ALIASES = {
+    "0.75kW与1.5kW电机对拖试验故障模拟实施方案（YFB801-2+90L-4）.docx":
+        "0.75kW与1.5kW电机对拖试验故障模拟实施方案（Y）.docx",
+}
 
 
 def entry(identifier, identity, kind, text, title, locator, codes=None):
@@ -137,6 +141,8 @@ def main():
     sources = []
     for filename, manufacturer, model, version, kind in DOCUMENTS:
         path = args.source / filename
+        if not path.exists() and filename in SOURCE_ALIASES:
+            path = args.source / SOURCE_ALIASES[filename]
         imported = docx_entries(path, manufacturer, model, version, kind)
         entries.extend(imported)
         sources.append(dict(file=filename, entries=len(imported), sha256=hashlib.sha256(path.read_bytes()).hexdigest()))

@@ -27,7 +27,7 @@ Agent 请求携带当前来源，`read_industrial_dashboard` 工具复用展板�
 
 ### 工业分析工具与后台监测
 
-网页 Agent harness 显式注册17项工具，包括数据库目录/当前采样/原始记录、设备资料、数据质量、时间窗口统计、窗口比较、连续超限、代码事件、规则状态判断、故障码查询、维护知识检索、诊断证据、报告、证据绘图以及告警/任务管理。名称、全部参数及逐项使用案例见 [工具说明](tools/README.md)；`GET /api/tools` 可查看实际注册的参数 Schema，无需模型授权或数据库连接。
+网页 Agent harness 显式注册19项工具，包括数据库目录/当前采样/原始记录、设备资料、数据质量、时间窗口统计、窗口比较、连续超限、代码事件、规则状态判断、故障码查询、工业故障知识库来源与混合检索、维护知识检索、诊断证据、报告、证据绘图以及告警/任务管理。名称、全部参数及逐项使用案例见 [工具说明](tools/README.md)；`GET /api/tools` 可查看实际注册的参数 Schema，无需模型授权或数据库连接。
 
 统计在受限只读事务取回的完整窗口上由程序计算：每次最多7天、20000行/16MiB，超限拒绝而不返回部分统计。每轮最多16次工具调用、8次数据读取、4个不同分析窗口；单次结果最多62000字节。设备资料、字段单位、状态规则和厂家知识需人工提供，缺失时保持未知。配置格式见 [配置说明](tools/config/README.md)。工具已接入不代表真实故障诊断效果已验收。
 
@@ -46,7 +46,7 @@ Agent 请求携带当前来源，`read_industrial_dashboard` 工具复用展板�
 
 2026-10-23更新至1.1.0：先明确用户要的交付结果，再确定证据与必要分支，最后核对完成标准；只澄清会改变结果的关键缺项。组合任务共享已有条件与证据，不因涉及多个Skill而重复查询。通用数据规则和工具参数仍由系统提示词与工具定义维护，Skill聚焦任务决策。此次未改为按需加载，仍使用下述服务端预加载方式。
 
-网页没有文件读取工具，Pi默认不会展示可按需读取的Skill列表。因此服务端将这四份简短正文预加载到系统提示词，模型按description采用相关流程，用户不需要输入命令。仅填写`getSkills`列表无法实现此效果。既有17项业务工具和系统规则保留，不开放任意文件读取，不加载个人或其他项目Skill。修改Skill后需重启后端；旧回答不会重写。工单Skill只输出草稿，不代表工单系统已接入。
+网页没有文件读取工具，Pi默认不会展示可按需读取的Skill列表。因此服务端将这四份简短正文预加载到系统提示词，模型按description采用相关流程，用户不需要输入命令。仅填写`getSkills`列表无法实现此效果。既有19项业务工具和系统规则保留，不开放任意文件读取，不加载个人或其他项目Skill。修改Skill后需重启后端；旧回答不会重写。工单Skill只输出草稿，不代表工单系统已接入。
 
 离线验证：`node --import ./packages/coding-agent/src/experimental/source-resolver.ts --test packages/web/test/skills.test.ts`（仓库根目录）。验证发现、版本与实际SDK请求上下文，不调用真实模型或数据库；实际模型选用流程的效果仍需固定问题回归。
 
@@ -78,6 +78,27 @@ python scripts/import-knowledge.py --source ../knowledge
 python scripts/test_import_knowledge.py
 node --test packages/web/test/knowledge.test.ts
 ```
+
+### 随项目提供的 RAG 混合知识库
+
+项目同时提供四份工业资料、856 条结构化语料和已生成的向量索引，位于 `packages/web/knowledge/`。Agent 使用 `search_fault_knowledge`；自然语言查询在嵌入配置和索引校验通过时返回 `retrieval: "hybrid"`，故障码查询保留精确代码匹配。未配置嵌入服务或索引不匹配时，接口会明确返回 `retrieval: "keyword"` 及原因。
+
+在 `packages/web/.env` 配置独立于聊天模型的嵌入服务：
+
+```dotenv
+EMBEDDING_BASE_URL=https://api.siliconflow.cn/v1
+EMBEDDING_API_KEY=your-embedding-api-key
+EMBEDDING_MODEL=BAAI/bge-m3
+```
+
+资料更新后，在仓库根目录执行：
+
+```bash
+npm --prefix packages/web run knowledge:ingest
+npm --prefix packages/web run knowledge:build
+```
+
+`knowledge:build` 会重新调用嵌入服务并原子替换 `packages/web/knowledge/data/vectors.json`；密钥不会写入索引。可通过 `GET /api/knowledge/health` 确认 `records`、`vectors.ready` 和实际 `retrieval` 状态。原有 `.dcma-runtime/knowledge.json` 仍用于用户自行导入的自定义资料，二者来源和用途分开记录。
 
 生产预览前需分别执行 `npm run web:build` 和 `npm --prefix dashboard run build`，生成两套静态资源。两套页面在生产模式下仍由同一服务提供；开发验证不代表生产构建已验证。
 
@@ -148,7 +169,7 @@ DeepSeek 官方接口已配置在 `models.json`：`https://api.deepseek.com`，�
 
 网页设置中的“工业 MySQL 数据库”，点击“检查连接与表结构”读取实际目录，再点击表名预览20行。`GET /api/database/catalog` 返回连接状态、实际列名和类型；`GET /api/database/rows?schema=...&table=...&limit=20` 读取表数据。共用展板接口的已知表白名单；展板及 Agent 当前设备工具固定读取 `dcma`。
 
-Agent 默认优先 MySQL；显式导入模式下可以在设置中关闭数据库优先，以分析离线文件。17项工具始终注册，未配置数据库时查询明确失败，知识和告警工具仍可使用。当前设备读数优先使用同源展板工具，需要额外筛选时查询实际字段。所有工业数据库查询运行在只读事务中，不能执行任意 SQL、写入或删除。原始记录最多200行，近期采样最多100条原始记录中的有效时间点；分析工具的范围及预算见上文。原预览 SQL 超时5秒，分析 SQL 超时10秒，工具等待和事务支持取消。返回记录只代表声明的窗口，不代表全库统计。
+Agent 默认优先 MySQL；显式导入模式下可以在设置中关闭数据库优先，以分析离线文件。19项工具始终注册，未配置数据库时查询明确失败，知识和告警工具仍可使用。当前设备读数优先使用同源展板工具，需要额外筛选时查询实际字段。所有工业数据库查询运行在只读事务中，不能执行任意 SQL、写入或删除。原始记录最多200行，近期采样最多100条原始记录中的有效时间点；分析工具的范围及预算见上文。原预览 SQL 超时5秒，分析 SQL 超时10秒，工具等待和事务支持取消。返回记录只代表声明的窗口，不代表全库统计。
 
 - `real_data_01`、`real_data_02`、`real_data_03`、`real_data_04`：实时模拟数据。
 - `real_data`：短暂真实采集的数据。

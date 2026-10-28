@@ -10,7 +10,7 @@ export function ChatInput({
 }: {
 	onSendMessage: (text: string) => void;
 	disabled: boolean;
-	onStop: () => void;
+	onStop?: () => void;
 	onImport: () => void;
 }) {
 	const [value, setValue] = useState("");
@@ -131,7 +131,7 @@ export function ChatInput({
 					>
 						<Mic className="w-4 h-4 mx-auto" />
 					</button>
-					{disabled ? (
+					{disabled && onStop ? (
 						<button
 							type="button"
 							aria-label="停止生成"
@@ -144,7 +144,7 @@ export function ChatInput({
 						<button
 							type="button"
 							aria-label="发送问题"
-							disabled={!value.trim() || listening}
+							disabled={disabled || !value.trim() || listening}
 							onClick={send}
 							className="p-2 bg-blue-600 text-white rounded-xl disabled:opacity-40"
 						>

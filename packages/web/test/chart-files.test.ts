@@ -17,10 +17,16 @@ test("snapshot reload preserves exact data, permissions and rejects paths and sy
 		);
 		await saveChart(directory, chart);
 		assert.deepEqual(await readChart(directory, chart.id), chart);
-		assert.equal((await stat(join(directory, "charts", `${chart.id}.json`))).mode & 0o777, 0o600);
+		if (process.platform !== "win32")
+			assert.equal((await stat(join(directory, "charts", `${chart.id}.json`))).mode & 0o777, 0o600);
 		await assert.rejects(readChart(directory, "../profiles"));
 		const other = "22222222-2222-4222-8222-222222222222";
-		await symlink(join(directory, "charts", `${chart.id}.json`), join(directory, "charts", `${other}.json`));
+		try {
+			await symlink(join(directory, "charts", `${chart.id}.json`), join(directory, "charts", `${other}.json`));
+		} catch (error) {
+			if (error && typeof error === "object" && "code" in error && error.code === "EPERM") return;
+			throw error;
+		}
 		await assert.rejects(readChart(directory, other));
 		await rm(join(directory, "charts", `${other}.json`));
 		await writeFile(join(directory, "charts", `${other}.json`), "{}");

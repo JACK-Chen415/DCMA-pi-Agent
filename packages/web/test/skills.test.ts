@@ -12,13 +12,19 @@ import { createHarness } from "../../coding-agent/test/suite/harness.ts";
 import { industrialSystemPrompt } from "../tools/prompt.ts";
 import { createIndustrialResourceLoader } from "../tools/resources.ts";
 
-test("web resources discover four versioned project skills and preload their full instructions", () => {
+test("web resources discover five versioned project skills and preload their full instructions", () => {
 	const loader = createIndustrialResourceLoader();
 	const { skills, diagnostics } = loader.getSkills();
 	assert.deepEqual(diagnostics, []);
 	assert.deepEqual(
 		skills.map((skill) => skill.name),
-		["analysis-visualization-report", "device-operation-analysis", "fault-investigation", "work-order-draft"],
+		[
+			"analysis-visualization-report",
+			"device-operation-analysis",
+			"fault-investigation",
+			"rca-evidence-chain",
+			"work-order-draft",
+		],
 	);
 	const prompt = loader.getAppendSystemPrompt().join("\n\n");
 	for (const skill of skills) {
@@ -41,6 +47,22 @@ test("web resources discover four versioned project skills and preload their ful
 	assert.match(faultInstructions, /【动作不完整/);
 	assert.match(faultInstructions, /【不可关闭】/);
 	assert.match(faultInstructions, /【验证不充分】/);
+	const rcaSkill = skills.find((skill) => skill.name === "rca-evidence-chain");
+	assert.ok(rcaSkill);
+	const rcaInstructions = readFileSync(rcaSkill.filePath, "utf8");
+	assert.match(rcaInstructions, /^name: rca-evidence-chain/m);
+	assert.match(rcaInstructions, /正式异常链路交付/);
+	assert.match(rcaInstructions, /【证据缺口：缺/);
+	const normalizeSkillText = (value: string) => value.replace(/\r\n/g, "\n").replace(/\n+$/u, "");
+	assert.equal(
+		normalizeSkillText(
+			rcaInstructions
+				.replace(/^name: rca-evidence-chain/m, "name: fault-investigation")
+				.replace(/^description: .*$/m, "description: CLONED"),
+		),
+		normalizeSkillText(faultInstructions.replace(/^description: .*$/m, "description: CLONED")),
+		"RCA Skill must be a clone; the original fault-investigation Skill remains intact",
+	);
 });
 
 test("SDK sends skill bodies on real prompt turns without granting file or terminal tools", async () => {

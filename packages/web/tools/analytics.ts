@@ -1,7 +1,9 @@
 import { createCodeHistory } from "../../../dashboard/database/code-events.ts";
 import { finiteNumber } from "../../../dashboard/database/dashboard-data.ts";
 import {
+	type CodeHistory,
 	type DashboardRecord,
+	type DashboardTable,
 	dashboardTables,
 	fieldLabels,
 	type NumericField,
@@ -303,6 +305,13 @@ export function summarizeMetrics(
 export function compareMetricWindows(a: AnalysisWindow, b: AnalysisWindow, metrics: NumericField[]) {
 	const first = summarizeMetrics(a, metrics),
 		second = summarizeMetrics(b, metrics);
+	return compareMetricSummaries(first, second);
+}
+
+export function compareMetricSummaries<T extends { metrics: { metric: NumericField; mean: number | null }[] }>(
+	first: T,
+	second: T,
+) {
 	return {
 		a: first,
 		b: second,
@@ -439,26 +448,27 @@ export function analyzeThresholdEvents(window: AnalysisWindow, rule: ThresholdRu
 	};
 }
 
-export function getCodeEvents(window: AnalysisWindow, page = 1) {
-	if (!["fault_code", "alarm_code"].every((field) => window.availableFields.includes(field)))
-		throw new ToolInputError("当前来源缺少故障码或报警码字段，不能将未取得代码数据解释为0次事件。");
-	if (!Number.isInteger(page) || page < 1 || page > 200) throw new ToolInputError("事件页码必须是1至200的整数。");
-	const data = prepare(window);
-	const history = createCodeHistory({ table: window.table, page, from: window.from, to: window.to });
-	for (const { record } of data.rows) {
-		const raw = { ...record.raw };
-		for (const field of ["fault_code", "alarm_code"] as const) {
-			if (typeof raw[field] === "string" && !raw[field].trim()) raw[field] = null;
-		}
-		history.add(raw);
-	}
-	const result = history.finish();
-	const codeCoverage = (["fault_code", "alarm_code"] as const).map((field) => {
-		const usable = data.rows.filter(
-			({ record }) => record.raw[field] !== null && String(record.raw[field]).trim() !== "",
-		).length;
-		return { field, usable, missing: data.rows.length - usable };
-	});
+/** 故障／报警事件的完整统计数据；由窗口明细或数据库流式聚合两种来源提供。 */
+export interface CodeEventStats {
+	table: DashboardTable;
+	from: string;
+	to: string;
+	queriedAt: string;
+	complete: boolean;
+	availableFields: string[];
+	excludedIdentityRows: number;
+	invalidTimeRowsInSource: number;
+	invalidTimeRecords: number;
+	timeValidRecords: number;
+	firstSampleAt: string | null;
+	lastSampleAt: string | null;
+	history: CodeHistory;
+	codeCoverage: { field: "fault_code" | "alarm_code"; usable: number; missing: number }[];
+}
+
+export function getCodeEvents(stats: CodeEventStats) {
+	const { history: result, codeCoverage } = stats;
+	const page = result.page;
 	const anyUsable = codeCoverage.some((item) => item.usable > 0);
 	const codeCount = result.codes.length;
 	let codeTextTruncated = false;
@@ -468,7 +478,22 @@ export function getCodeEvents(window: AnalysisWindow, page = 1) {
 	};
 	return {
 		...result,
-		...scope(window),
+		schema: "dcma",
+		timeInterpretation: "Asia/Shanghai_provisional",
+		unitsVerified: false,
+		coverage: {
+			firstSampleAt: stats.firstSampleAt,
+			lastSampleAt: stats.lastSampleAt,
+			timeValidRecords: stats.timeValidRecords,
+		},
+		table: stats.table,
+		from: stats.from,
+		to: stats.to,
+		queriedAt: stats.queriedAt,
+		kind: stats.table === "real_data" ? "acquired" : "simulation",
+		complete: stats.complete,
+		availableFields: stats.availableFields,
+		excludedIdentityRows: stats.excludedIdentityRows,
 		status: !anyUsable ? "unknown" : codeCoverage.some((item) => item.missing > 0) ? "partial" : "observed",
 		codeCoverage,
 		countsAreObserved: true,
@@ -485,13 +510,51 @@ export function getCodeEvents(window: AnalysisWindow, page = 1) {
 		codeTextTruncated,
 		eventsTruncated: result.total > result.events.length,
 		hasMore: result.total > page * result.pageSize,
-		invalidTimeRowsInSource: window.invalidTimeRows,
+		invalidTimeRowsInSource: stats.invalidTimeRowsInSource,
 		invalidTimeRangeAttribution: "unknown",
-		invalidTimeRecords: data.invalidTimeRecords,
+		invalidTimeRecords: stats.invalidTimeRecords,
 		scope: "window_only",
 		continuity: "code_history_semantics_no_gap_inference",
 		currentStateInterpretation: "not_established",
 	};
+}
+
+/** 已加载窗口（最多2万行）的事件统计；完整7天窗口请用数据库流式读取。 */
+export function codeEventsFromWindow(window: AnalysisWindow, page = 1) {
+	if (!["fault_code", "alarm_code"].every((field) => window.availableFields.includes(field)))
+		throw new ToolInputError("当前来源缺少故障码或报警码字段，不能将未取得代码数据解释为0次事件。");
+	if (!Number.isInteger(page) || page < 1 || page > 200) throw new ToolInputError("事件页码必须是1至200的整数。");
+	const data = prepare(window);
+	const history = createCodeHistory({ table: window.table, page, from: window.from, to: window.to });
+	for (const { record } of data.rows) {
+		const raw = { ...record.raw };
+		for (const field of ["fault_code", "alarm_code"] as const) {
+			if (typeof raw[field] === "string" && !raw[field].trim()) raw[field] = null;
+		}
+		history.add(raw);
+	}
+	const codeCoverage = (["fault_code", "alarm_code"] as const).map((field) => {
+		const usable = data.rows.filter(
+			({ record }) => record.raw[field] !== null && String(record.raw[field]).trim() !== "",
+		).length;
+		return { field, usable, missing: data.rows.length - usable };
+	});
+	return getCodeEvents({
+		table: window.table,
+		from: window.from,
+		to: window.to,
+		queriedAt: window.queriedAt,
+		complete: window.complete,
+		availableFields: window.availableFields,
+		excludedIdentityRows: window.excludedIdentityRows,
+		invalidTimeRowsInSource: window.invalidTimeRows,
+		invalidTimeRecords: data.invalidTimeRecords,
+		timeValidRecords: data.rows.length,
+		firstSampleAt: data.rows.length ? new Date(data.rows[0].time).toISOString() : null,
+		lastSampleAt: data.rows.length ? new Date(data.rows[data.rows.length - 1].time).toISOString() : null,
+		history: history.finish(),
+		codeCoverage,
+	});
 }
 
 export function assessDeviceState(

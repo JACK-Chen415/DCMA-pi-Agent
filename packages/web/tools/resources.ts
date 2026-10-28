@@ -5,8 +5,8 @@ import { industrialSystemPrompt } from "./prompt.ts";
 
 export function createIndustrialResourceLoader(): ResourceLoader {
 	const loaded = loadSkillsFromDir({ dir: fileURLToPath(new URL("../skills/", import.meta.url)), source: "project" });
-	if (loaded.skills.length !== 4 || loaded.diagnostics.length) {
-		throw new Error("工业 Skill 加载失败，请检查 packages/web/skills 中的四份 SKILL.md。");
+	if (loaded.skills.length !== 5 || loaded.diagnostics.length) {
+		throw new Error("工业 Skill 加载失败，请检查 packages/web/skills 中的五份 SKILL.md。");
 	}
 	loaded.skills.sort((a, b) => a.name.localeCompare(b.name));
 	// The web agent has no file reader; preload these small, repository-owned skills instead of granting file access.

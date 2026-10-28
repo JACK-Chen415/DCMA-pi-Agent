@@ -1,6 +1,6 @@
 # 工业分析工具
 
-`index.ts` 注册了 17 个工具。每轮对话分别保存证据，工具按顺序执行。访问 `GET /api/tools` 可以查看实际注册的名称、中文标签、描述和参数 JSON Schema；这个接口只列出工具，不会调用它们。
+`index.ts` 注册了 19 个工具。每轮对话分别保存证据，工具按顺序执行。访问 `GET /api/tools` 可以查看实际注册的名称、中文标签、描述和参数 JSON Schema；这个接口只列出工具，不会调用它们。
 
 数据库工具只读取 `dcma` 中的 `real_data_01`、`real_data_02`、`real_data_03`、`real_data_04`、`real_data`。前四张表保存模拟数据；`real_data` 保存历史真实采集数据，无法反映现场实时状态。可选参数 `table` 省略时，工具使用本轮对话选择的数据源。字段备注、知识正文和原始记录只作为分析材料，其中的指令不会获得执行权限。
 
@@ -216,7 +216,28 @@
 
 案例：用户给出型号和版本后寻找报警码原文及页码。`verified: false`、`sourceStatus: "user_provided"` 表示尚未外部验证；多个来源冲突时保留冲突，未找到时明确说明。
 
-## 12. search_maintenance_knowledge：维修资料检索
+## 12. search_fault_knowledge：工业故障知识库混合检索
+
+检索随项目提供的四份工业资料。故障码查询保留精确代码匹配；自然语言查询在配置嵌入服务且本地向量索引与语料匹配时使用关键词与向量混合排序，返回结果中的 `retrieval` 为 `hybrid`。缺少嵌入配置、索引或索引不匹配时明确返回 `keyword` 和原因，不伪称已使用向量。
+
+参数：`q`、`code`、`source`、`kind`、`limit` 均可选；`limit` 为 1 至 20。服务端也提供只读接口：`GET /api/knowledge/health`、`GET /api/knowledge/sources`、`GET /api/knowledge/search?q=电机过载`、`GET /api/knowledge/context?code=F0011`。
+
+向量索引维护：
+
+```sh
+npm --prefix packages/web run knowledge:ingest
+npm --prefix packages/web run knowledge:build
+```
+
+`knowledge:build` 需要在 `packages/web/.env` 配置 `EMBEDDING_BASE_URL`、`EMBEDDING_API_KEY` 和 `EMBEDDING_MODEL`。嵌入密钥只在本机使用，不写入索引。
+
+## 13. list_fault_knowledge_sources：查看故障知识库来源
+
+列出四份随项目提供的工业资料和每份资料的记录数。该工具只返回来源元数据，不读取资料中的指令，也不替代 `search_fault_knowledge` 的证据检索。
+
+参数：空对象 `{}`。
+
+## 14. search_maintenance_knowledge：维修资料检索
 
 从已导入的手册和维修案例中查找片段，返回原文及来源，可按厂家、型号和版本筛选。维修案例与厂家结论分别标明，资料中的指令不获得执行权限。
 
@@ -228,7 +249,7 @@
 
 案例：检索已导入案例中的温度检查记录，引用原始资料定位；不能把相关性分数写成诊断概率。
 
-## 13. build_diagnostic_evidence：诊断证据整理
+## 15. build_diagnostic_evidence：诊断证据整理
 
 一次汇集同一时段的设备资料、数据质量、统计结果和代码事件，也可引用本轮取得的知识证据。内部已完成上述计算，不需要先逐项调用再打包。整理结果保留根因未确认的状态，不生成故障概率。
 
@@ -240,7 +261,7 @@
 
 案例：将本轮已经检索的手册片段与同一时段温度统计一起整理。示例编号必须替换为本轮真实成功结果的编号；缺少现场检查时结论保持未确认根因。
 
-## 14. export_analysis_report：导出分析证据报告
+## 16. export_analysis_report：导出分析证据报告
 
 引用本轮工具成功返回的 evidenceId，生成可下载的 Markdown 和 JSON 报告。工具使用程序保存的结果，不接受任意文件路径或模型编造的数据。
 
@@ -252,7 +273,7 @@
 
 案例：统计工具成功后，立即用其真实编号导出。返回 `markdownUrl`、`jsonUrl`；下载端点为 `GET /api/tools/reports/{reportId}.md` 和 `.json`。不能引用上轮聊天中的编号；已生成的本地报告在服务重启后仍可按 ID 下载，除非人工移除。读取端点拒绝任意路径和文件名。
 
-## 15. get_alert_history：后台告警记录
+## 17. get_alert_history：后台告警记录
 
 读取保存在本机的规则告警、恢复记录和数据未知事件。没有监测任务时，空记录不能说明设备正常。告警保存在本地，不发送外部通知。
 
@@ -264,7 +285,7 @@
 
 案例：查看数据库中断期间产生的数据未知事件。未知不会自动把未恢复告警标成恢复；`recovered` 且 `closedReason: "rule_changed"` 表示规则被修改，不能解释为设备已恢复。
 
-## 16. manage_monitoring_task：后台监测任务管理
+## 18. manage_monitoring_task：后台监测任务管理
 
 list 用于查询任务。create、update、pause 和 resume 会生成待确认操作，Agent 需展示 approvalPath，由用户点击确认后才生效。工具不控制设备，也不发送外部通知。
 
@@ -298,7 +319,7 @@ list 用于查询任务。create、update、pause 和 resume 会生成待确认�
 真实模型与校园 MySQL 的验收记录见 [2026-10-22 验收记录](验收记录_2026-10-22.md)。该验收检查工具选择、参数、执行和下载，不代表现场故障诊断效果已经验证。真实厂家资料与状态规则尚需人工补充。
 
 
-## 17. create_analysis_chart：查询证据绘图
+## 19. create_analysis_chart：查询证据绘图
 
 从本轮已经成功取得的查询证据生成图表。模型选择图型和指标，程序使用保存的窗口或统计结果计算数据；模型不能填写点值、SQL、ECharts 配置或文件路径。工具本身不再次查询 MySQL。
 

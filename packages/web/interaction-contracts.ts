@@ -25,6 +25,8 @@ export interface ToolStep {
 	status: "running" | "done" | "error";
 	durationMs?: number;
 	evidenceId?: string;
+	/** 工具失败时的原因，最多200字；只用于步骤列表展示。 */
+	error?: string;
 }
 export interface EvidenceRecord {
 	id: string;
@@ -62,6 +64,9 @@ export function validateToolSteps(value: unknown): ToolStep[] {
 					: {}),
 				...(typeof item.evidenceId === "string" && chartIdPattern.test(item.evidenceId)
 					? { evidenceId: item.evidenceId }
+					: {}),
+				...(typeof item.error === "string" && item.error.trim() && item.error.length <= 200
+					? { error: item.error }
 					: {}),
 			},
 		];

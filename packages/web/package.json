@@ -5,11 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "node --import ../coding-agent/src/experimental/source-resolver.ts server.ts",
+    "knowledge:ingest": "python knowledge/scripts/ingest.py && python knowledge/scripts/validate.py",
+    "knowledge:build": "node --import ../coding-agent/src/experimental/source-resolver.ts knowledge-build.ts",
+    "knowledge:reindex": "node --import ../coding-agent/src/experimental/source-resolver.ts knowledge-reindex.ts",
     "build": "vite build",
     "preview": "node --import ../coding-agent/src/experimental/source-resolver.ts server.ts --production",
     "start": "node --import ../coding-agent/src/experimental/source-resolver.ts server.ts --production",
     "check": "tsc -p tsconfig.json && tsc -p tsconfig.server.json",
-    "test:tools": "node --import ../coding-agent/src/experimental/source-resolver.ts --test test/industrial-tools.test.ts test/tool-trace.test.ts test/tool-registry.test.ts test/telemetry.test.ts test/chart-*.test.ts"
+    "test:tools": "node --import ../coding-agent/src/experimental/source-resolver.ts --test test/industrial-tools.test.ts test/tool-trace.test.ts test/tool-registry.test.ts test/telemetry.test.ts test/chart-*.test.ts test/knowledge.test.ts test/knowledge-rag.test.ts"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^1.1.0",

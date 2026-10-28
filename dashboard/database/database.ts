@@ -2,8 +2,8 @@ import { createPool, escapeId, type Pool, type PoolConnection, type RowDataPacke
 import type { Connection as CoreConnection } from "mysql2";
 import { createCodeHistory, type CodeHistoryOptions } from "./code-events.ts";
 import type { DatabaseCatalog, DatabaseRows, DatabaseTable } from "./types.ts";
-import { collectionTimeSql, makeDashboardData, normalizeRecord } from "./dashboard-data.ts";
-import { dashboardTables, fieldLabels, type DashboardData, type DashboardHistory, type DashboardRange, type DashboardRecord, type DashboardSource, type DashboardTable } from "./dashboard-types.ts";
+import { collectionTimeSql, makeDashboardData, normalizeRecord, parseCollectionTime } from "./dashboard-data.ts";
+import { dashboardTables, fieldLabels, numericFields, type NumericField, type DashboardData, type DashboardHistory, type DashboardRange, type DashboardRecord, type DashboardSource, type DashboardTable } from "./dashboard-types.ts";
 
 const sources = ["real_data", "real_data_01", "real_data_02", "real_data_03", "real_data_04"];
 let pool: Pool | undefined;
@@ -264,6 +264,77 @@ export async function closeDatabase(): Promise<void> {
 	pool = undefined;
 }
 
+export interface MetricCondition {
+	metric: NumericField;
+	operator: "gt" | "lt";
+	threshold: number;
+}
+
+// Aggregate inside the same read-only snapshot; no raw-row limit or partial statistics.
+export async function readMetricAggregates(options: DashboardRange & {
+	table: DashboardTable; metrics: NumericField[]; bucketSeconds: number; condition?: MetricCondition;
+}, signal?: AbortSignal) {
+	const { table, metrics, bucketSeconds, condition } = options;
+	const from = Date.parse(options.from), to = Date.parse(options.to);
+	const bucketCount = Math.max(1, Math.ceil((to - from) / (bucketSeconds * 1000)));
+	if (!dashboardTables.includes(table) || !Number.isFinite(from) || !Number.isFinite(to) || from > to || to - from > 7 * 86400000 ||
+		new Date(from).toISOString() !== options.from || new Date(to).toISOString() !== options.to ||
+		!metrics.length || metrics.some((field) => !numericFields.includes(field)) || new Set(metrics).size !== metrics.length ||
+		!Number.isFinite(bucketSeconds) || bucketSeconds <= 0 || bucketCount > 200 ||
+		(condition && (!metrics.includes(condition.metric) || !["gt", "lt"].includes(condition.operator) || !Number.isFinite(condition.threshold))))
+		throw new Error("ANALYSIS_INVALID_AGGREGATION");
+	const metadata = (await waitForCatalog(false, signal)).find((item) => item.schema === "dcma" && item.name === table);
+	if (!metadata || ["id", "timestamp", "device_name", "inverter_name"].some((name) => !metadata.columns.some((column) => column.name === name)))
+		throw new Error("ANALYSIS_UNAVAILABLE");
+	if (condition && !metadata.columns.some((column) => column.name === condition.metric)) throw new Error("ANALYSIS_INVALID_AGGREGATION");
+	return readOnly(async (connection) => {
+		const qualified = `${escapeId("dcma")}.${escapeId(table)}`;
+		const identified = "device_name IS NOT NULL AND TRIM(device_name) <> '' AND inverter_name IS NOT NULL AND TRIM(inverter_name) <> ''";
+		const [identities] = await connection.query<RowDataPacket[]>({ sql: `SELECT DISTINCT device_name, inverter_name FROM ${qualified} WHERE ${identified} LIMIT 2`, timeout: 10000 });
+		if (identities.length > 1) throw new Error("ANALYSIS_MIXED_DEVICES");
+		const [counts] = await connection.query<RowDataPacket[]>({ sql: `SELECT SUM((${collectionTimeSql}) IS NULL) AS invalid_times, SUM(NOT (${identified})) AS excluded FROM ${qualified}`, timeout: 10000 });
+		const expressions = metrics.map((metric, index) => {
+			const column = metadata.columns.find((item) => item.name === metric);
+			const value = !column ? "NULL" : /^(tinyint|smallint|mediumint|int|bigint|float|double|decimal)$/.test(column.type)
+				? escapeId(metric)
+				: `CASE WHEN TRIM(${escapeId(metric)}) REGEXP '^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$' THEN ${escapeId(metric)} + 0e0 ELSE NULL END`;
+			return `${value} AS m${index}`;
+		});
+		const selected = `(SELECT ${collectionTimeSql} AS __collection_ms, ${expressions.join(",")} FROM ${qualified} WHERE ${identified}) AS metric_rows`;
+		const filtered = `${selected} WHERE __collection_ms BETWEEN ? AND ?`;
+		const aggregates = metrics.flatMap((_, index) => [
+			`COUNT(m${index}) AS m${index}_count`, `SUM(m${index} = 0) AS m${index}_zeros`,
+			`AVG(m${index}) AS m${index}_mean`, `STDDEV_POP(m${index}) AS m${index}_stddev`,
+			`MIN(m${index}) AS m${index}_min`, `MAX(m${index}) AS m${index}_max`,
+		]);
+		if (condition) aggregates.push(`SUM(m${metrics.indexOf(condition.metric)} ${condition.operator === "gt" ? ">" : "<"} ?) AS matched`);
+		const [rows] = await connection.execute<RowDataPacket[]>({ sql: `SELECT LEAST(${bucketCount - 1}, FLOOR((__collection_ms - ?) / ?)) AS bucket,
+			COUNT(*) AS records, MIN(__collection_ms) AS first_at, MAX(__collection_ms) AS last_at, ${aggregates.join(",")}
+			FROM ${filtered} GROUP BY bucket WITH ROLLUP`, timeout: 10000 },
+			[from, bucketSeconds * 1000, ...(condition ? [condition.threshold] : []), from, to]);
+		let endpoints: RowDataPacket[] = [];
+		const total = rows.find((row) => row.bucket === null);
+		if (Number(total?.records ?? 0) > 0) {
+			// Duplicate timestamps cannot establish a unique first/last reading.
+			const [times] = await connection.execute<RowDataPacket[]>({ sql: `SELECT ${metrics.flatMap((_, index) => [
+				`MIN(IF(m${index} IS NOT NULL, __collection_ms, NULL)) AS m${index}_first`,
+				`MAX(IF(m${index} IS NOT NULL, __collection_ms, NULL)) AS m${index}_last`,
+			]).join(",")} FROM (SELECT __collection_ms, ${metrics.map((_, index) => `MIN(m${index}) AS m${index}`).join(",")}
+			FROM ${filtered} GROUP BY __collection_ms HAVING COUNT(*) = 1) AS unique_times`, timeout: 10000 }, [from, to]);
+			const values = [...new Set(Object.values(times[0]).filter((value) => value !== null).map(Number))];
+			if (values.length) {
+				[endpoints] = await connection.execute<RowDataPacket[]>({ sql: `SELECT * FROM ${selected} WHERE __collection_ms IN (${values.map(() => "?").join(",")})`, timeout: 10000 }, values);
+			}
+		}
+		return {
+			rows, endpoints, bucketCount, bucketSeconds, queriedAt: new Date().toISOString(),
+			device: identities[0] ? String(identities[0].device_name).slice(0, 256).replace(/[\u0000-\u001f]/g, " ") : null,
+			availableFields: metadata.columns.map((column) => column.name),
+			invalidTimeRows: Number(counts[0]?.invalid_times ?? 0), excludedIdentityRows: Number(counts[0]?.excluded ?? 0),
+		};
+	}, signal);
+}
+
 // Complete bounded window in one read-only transaction. Refuse rather than return partial statistics.
 export async function readAnalysisRows(options: DashboardRange & { table: DashboardTable }, signal?: AbortSignal): Promise<{
 	records: DashboardRecord[]; invalidTimeRows: number; excludedIdentityRows: number; queriedAt: string; availableFields: string[];
@@ -289,11 +360,14 @@ export async function readAnalysisRows(options: DashboardRange & { table: Dashbo
 		if (identities.length) {
 			const columns = Object.keys(fieldLabels).filter((name) => metadata.columns.some((column) => column.name === name)).map((name) => escapeId(name)).join(",");
 			// Prepared binary reads preserve FLOAT precision, matching readDashboard/readSampleHistory.
-			const stream = (connection.connection as unknown as CoreConnection).execute({
+			const query = (connection.connection as unknown as CoreConnection).execute({
 				sql: `SELECT * FROM (SELECT ${columns}, ${collectionTimeSql} AS __collection_ms FROM ${qualified}
 				WHERE device_name <=> ? AND inverter_name <=> ?) AS analysis_rows
 				WHERE __collection_ms BETWEEN ? AND ? ORDER BY __collection_ms ASC, id ASC LIMIT 20001`, timeout: 10000,
-			}, [identities[0].device_name, identities[0].inverter_name, from, to]).stream({ highWaterMark: 32 });
+			}, [identities[0].device_name, identities[0].inverter_name, from, to]);
+			const stream = query.stream({ highWaterMark: 32 });
+			// mysql2 removes its error listener on stream close; handle late timeouts after cancellation.
+			query.on("error", (error: Error) => stream.destroy(error));
 			const abortStream = () => stream.destroy(new Error("分析查询已取消"));
 			signal?.addEventListener("abort", abortStream, { once: true });
 			let bytes = 0;
@@ -372,8 +446,11 @@ export async function readCodeHistory(options: CodeHistoryOptions, signal?: Abor
 		if (identities.length > 1) throw new Error("CODE_HISTORY_MIXED_DEVICES");
 		const history = createCodeHistory(options);
 		if (!identities.length) return history.finish();
-		const stream = (connection.connection as unknown as CoreConnection).query({ sql: `SELECT id, timestamp, fault_code, alarm_code, ${collectionTimeSql} AS __collection_ms FROM ${qualified}
-			WHERE device_name <=> ? AND inverter_name <=> ? ORDER BY __collection_ms ASC, id ASC`, timeout: 55000 }, [identities[0].device_name, identities[0].inverter_name]).stream({ highWaterMark: 1000 });
+		const query = (connection.connection as unknown as CoreConnection).query({ sql: `SELECT id, timestamp, fault_code, alarm_code, ${collectionTimeSql} AS __collection_ms FROM ${qualified}
+			WHERE device_name <=> ? AND inverter_name <=> ? ORDER BY __collection_ms ASC, id ASC`, timeout: 55000 }, [identities[0].device_name, identities[0].inverter_name]);
+		const stream = query.stream({ highWaterMark: 1000 });
+		// Keep handling command errors after mysql2 detaches the closed stream.
+		query.on("error", (error: Error) => stream.destroy(error));
 		const abortStream = () => stream.destroy(new Error("故障历史查询已取消"));
 		signal?.addEventListener("abort", abortStream, { once: true });
 		try {
@@ -381,6 +458,68 @@ export async function readCodeHistory(options: CodeHistoryOptions, signal?: Abor
 			for await (const row of stream) { signal?.throwIfAborted(); history.add(row as Record<string, unknown>); }
 		} finally { signal?.removeEventListener("abort", abortStream); }
 		return history.finish();
+	}, signal);
+}
+
+// 故障／报警事件按时间窗口流式累计：只取4个字段，不占用2万行原始明细预算，支持完整7天窗口。
+export async function readCodeEvents(options: DashboardRange & { table: DashboardTable; page: number }, signal?: AbortSignal) {
+	const from = Date.parse(options.from), to = Date.parse(options.to);
+	if (!dashboardTables.includes(options.table) || !Number.isFinite(from) || !Number.isFinite(to) || from > to ||
+		to - from > 7 * 86400000 || new Date(from).toISOString() !== options.from || new Date(to).toISOString() !== options.to ||
+		!Number.isInteger(options.page) || options.page < 1 || options.page > 200)
+		throw new Error("ANALYSIS_INVALID_RANGE");
+	const metadata = (await waitForCatalog(false, signal)).find((item) => item.schema === "dcma" && item.name === options.table);
+	if (!metadata || ["id", "timestamp", "device_name", "inverter_name", "fault_code", "alarm_code"].some((field) => !metadata.columns.some((column) => column.name === field)))
+		throw new Error("CODE_HISTORY_UNAVAILABLE");
+	return readOnly(async (connection) => {
+		const qualified = `${escapeId("dcma")}.${escapeId(options.table)}`;
+		const identified = "device_name IS NOT NULL AND TRIM(device_name) <> '' AND inverter_name IS NOT NULL AND TRIM(inverter_name) <> ''";
+		const [identities] = await connection.query<RowDataPacket[]>({ sql: `SELECT DISTINCT device_name, inverter_name FROM ${qualified} WHERE ${identified} LIMIT 2`, timeout: 10000 });
+		if (identities.length > 1) throw new Error("ANALYSIS_MIXED_DEVICES");
+		const [counts] = await connection.query<RowDataPacket[]>({
+			sql: `SELECT SUM((${collectionTimeSql}) IS NULL) AS invalid_times, SUM(NOT (${identified})) AS excluded FROM ${qualified}`, timeout: 10000,
+		});
+		const history = createCodeHistory({ table: options.table, page: options.page, from: options.from, to: options.to });
+		const usable = { fault_code: 0, alarm_code: 0 };
+		let records = 0, firstSampleAt: string | null = null, lastSampleAt: string | null = null;
+		if (identities.length) {
+			const query = (connection.connection as unknown as CoreConnection).query({
+				sql: `SELECT * FROM (SELECT id, timestamp, fault_code, alarm_code, ${collectionTimeSql} AS __collection_ms FROM ${qualified}
+				WHERE device_name <=> ? AND inverter_name <=> ?) AS code_rows
+				WHERE __collection_ms BETWEEN ? AND ? ORDER BY __collection_ms ASC, id ASC`, timeout: 30000,
+			}, [identities[0].device_name, identities[0].inverter_name, from, to]);
+			const stream = query.stream({ highWaterMark: 1000 });
+			query.on("error", (error: Error) => stream.destroy(error));
+			const abortStream = () => stream.destroy(new Error("故障事件查询已取消"));
+			signal?.addEventListener("abort", abortStream, { once: true });
+			try {
+				signal?.throwIfAborted();
+				for await (const item of stream) {
+					signal?.throwIfAborted();
+					const row = item as Record<string, unknown>;
+					const time = parseCollectionTime(row.timestamp);
+					if (time) { records++; firstSampleAt ??= time; lastSampleAt = time; }
+					for (const field of ["fault_code", "alarm_code"] as const) {
+						const value = row[field];
+						if (value !== null && value !== undefined && String(value).trim() !== "") usable[field]++;
+					}
+					history.add(row);
+				}
+			} finally { signal?.removeEventListener("abort", abortStream); stream.destroy(); }
+		}
+		const result = history.finish();
+		const invalidTimeRows = Number(counts[0]?.invalid_times ?? 0), excludedIdentityRows = Number(counts[0]?.excluded ?? 0);
+		if (![invalidTimeRows, excludedIdentityRows].every((value) => Number.isSafeInteger(value) && value >= 0)) throw new Error("ANALYSIS_TOO_LARGE");
+		return {
+			table: options.table, from: options.from, to: options.to, queriedAt: new Date().toISOString(), complete: true as const,
+			availableFields: metadata.columns.map((column) => column.name),
+			excludedIdentityRows, invalidTimeRowsInSource: invalidTimeRows, invalidTimeRecords: result.invalidTimes,
+			timeValidRecords: records, firstSampleAt, lastSampleAt, history: result,
+			codeCoverage: [
+				{ field: "fault_code" as const, usable: usable.fault_code, missing: records - usable.fault_code },
+				{ field: "alarm_code" as const, usable: usable.alarm_code, missing: records - usable.alarm_code },
+			],
+		};
 	}, signal);
 }
 
