@@ -117,6 +117,54 @@ test("manual meanings use original code and plain source text without internal s
 	assert.doesNotMatch(output, /F07090|\/api\/knowledge|KB-001|词法|语义|综合分数/);
 });
 
+test("event and manual claims share each cited meaning and applicability reminder once", async () => {
+	const { store } = fixture();
+	const { window } = chartFixture([1, 1, 1]);
+	window.availableFields.push("fault_code", "alarm_code");
+	for (const row of window.records) {
+		row.raw.fault_code = "0";
+		row.raw.alarm_code = "A07089";
+	}
+	const events = store.add("get_code_events", {}, codeEventsFromWindow(window));
+	const result = await searchFaultKnowledge({ code: "A07089" });
+	const manual = store.add("search_fault_knowledge", {}, result);
+	const repeated = store.add("search_fault_knowledge", {}, result);
+	const eventClaim = { kind: "events", evidenceId: events.id };
+	const manualClaim = { kind: "manual", evidenceId: manual.id };
+	for (const format of ["brief", "report"]) {
+		for (const claims of [
+			[eventClaim, manualClaim],
+			[manualClaim, eventClaim],
+		]) {
+			const output = renderAnalysis({ format, claims: [...claims, { kind: "manual", evidenceId: repeated.id }] }, [
+				events,
+				manual,
+				repeated,
+			]);
+			assert.equal(output.match(/A07089 单位转换/g)?.length, 1);
+			assert.equal(output.match(/现场型号/g)?.length, 1);
+			assert.match(output, /报警事件1次/);
+			assert.match(output, /232/);
+			assert.match(output, /确认适用后按现场规程执行/);
+			assert.doesNotMatch(output, /含义未确认|## 手册依据\n\n(?:##|限制说明|$)/);
+		}
+	}
+	const otherSource = store.add(
+		"search_fault_knowledge",
+		{},
+		{
+			...result,
+			results: result.results.map((item) => ({ ...item, source_file: "另一份手册.pdf" })),
+		},
+	);
+	const distinct = renderAnalysis(
+		{ format: "brief", claims: [manualClaim, { kind: "manual", evidenceId: otherSource.id }] },
+		[manual, otherSource],
+	);
+	assert.match(distinct, /S120.*手册/);
+	assert.match(distinct, /另一份手册/);
+});
+
 test("the delivery gate never releases a skipped, failed or forged analysis draft", () => {
 	const { record, plan } = fixture();
 	const gate = createAnswerDelivery();

@@ -138,6 +138,14 @@ export function renderAnalysis(value: unknown, records: EvidenceRecord[]): strin
 	const sections: { title: string; body: string }[] = [];
 	const scopes = new Map<string, Data>();
 	const limits = new Set<string>();
+	const citedManuals = new Set<string>();
+	const citeManual = (record: EvidenceRecord, item: Data) => {
+		const citation = manualText(record, item);
+		if (citedManuals.has(citation)) return "";
+		citedManuals.add(citation);
+		return citation;
+	};
+	const manualLimit = "代码释义须核对现场型号、驱动对象与版本；涉及参数恢复或修改时，确认适用后按现场规程执行。";
 	const unitFor = (table: unknown, metric: string) => {
 		const reading = records.find(
 			(record) => record.tool === "read_industrial_dashboard" && object(record.result).table === table,
@@ -254,13 +262,12 @@ export function renderAnalysis(value: unknown, records: EvidenceRecord[]): strin
 										: item.code === entry.code &&
 											object(source.input).kind === (entry.field === "fault_code" ? "fault" : "alarm"),
 								)
-								.map((item) => manualText(source, item));
+								.map((item) => citeManual(source, item));
 						});
-						return ` ${entry.field === "fault_code" ? "故障码" : "报警码"}${text(entry.code)}记录${format(entry.count)}次，累计观察跨度${format(number(entry.durationMs) / 3600000)}小时、平均每次${format(number(entry.durationMs) / number(entry.count) / 60000)}分钟。${definitions.length ? definitions.join(" ") : "含义未确认，尚未取得适用的手册解释。"}`;
+						return ` ${entry.field === "fault_code" ? "故障码" : "报警码"}${text(entry.code)}记录${format(entry.count)}次，累计观察跨度${format(number(entry.durationMs) / 3600000)}小时、平均每次${format(number(entry.durationMs) / number(entry.count) / 60000)}分钟。${definitions.length ? definitions.filter(Boolean).join(" ") : "含义未确认，尚未取得适用的手册解释。"}`;
 					})
 					.join("");
-				if (list(data.codes).length)
-					limits.add("代码释义须核对现场型号、驱动对象与版本；涉及参数恢复或修改时，确认适用后按现场规程执行。");
+				if (list(data.codes).length) limits.add(manualLimit);
 			} else {
 				if (!claim.code) throw new ToolInputError("event_pattern必须指定证据中的原码code。");
 				const events = list(data.events)
@@ -286,8 +293,11 @@ export function renderAnalysis(value: unknown, records: EvidenceRecord[]): strin
 				(item) => !claim.itemId || item.id === claim.itemId,
 			);
 			if (!items.length) throw new ToolInputError("没有可引用的手册条目，不能补造释义。");
-			body = items.map((item) => manualText(record, item)).join(" ");
-			body += " 以上为资料释义，现场型号、驱动对象及适用性需核对；参数恢复或修改须在确认适用后按现场规程执行。";
+			body = items
+				.map((item) => citeManual(record, item))
+				.filter(Boolean)
+				.join(" ");
+			limits.add(manualLimit);
 			title = "手册依据";
 		} else if (claim.kind === "continuity") {
 			allow("check_data_quality");
@@ -363,7 +373,7 @@ export function renderAnalysis(value: unknown, records: EvidenceRecord[]): strin
 						.join("\n")}`;
 			}
 		} else throw new ToolInputError("尚不支持该结论类型。");
-		sections.push({ title, body });
+		if (body) sections.push({ title, body });
 	}
 	const scope = [...scopes.values()][0];
 	const range = scope
