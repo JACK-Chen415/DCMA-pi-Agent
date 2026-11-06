@@ -1,9 +1,9 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { type AddressInfo, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { ToolResultMessage } from "@earendil-works/pi-ai/compat";
+import { OAuthCallbackServer } from "@earendil-works/pi-mcp/oauth";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { InMemoryAuthStorageBackend } from "../../src/core/auth-storage.ts";
 import { emitSessionShutdownEvent } from "../../src/core/extensions/runner.ts";
@@ -171,17 +171,25 @@ describe("AgentSession MCP OAuth", () => {
 		expect(server.deletes).toEqual(["access-1"]);
 	});
 
-	async function freePort(): Promise<number> {
-		return new Promise<number>((resolve) => {
-			const probe = createServer().listen(0, "127.0.0.1", () => {
-				const address = probe.address() as AddressInfo;
-				probe.close(() => resolve(address.port));
-			});
+	async function fixedCallbackUrl(path: string, redirectHost = "127.0.0.1"): Promise<string> {
+		// Keep the real listener bound while creating the fixtures; probing and releasing a port races
+		// with the OAuth test server and other connections using ephemeral ports on CI.
+		const callback = await OAuthCallbackServer.listen({ path, redirectHost });
+		const url = new URL(callback.redirectUrl);
+		const listen = vi.spyOn(OAuthCallbackServer, "listen").mockImplementationOnce(async (options) => {
+			expect(options).toMatchObject({ host: "127.0.0.1", redirectHost, port: Number(url.port), path });
+			return callback;
 		});
+		cleanups.push(() => {
+			listen.mockRestore();
+		});
+		// Sign-in closes it normally; also release it if setup or an assertion fails before sign-in.
+		cleanups.push(() => callback.close().catch(() => undefined));
+		return url.href;
 	}
 
 	it("uses the configured callback URL and scope", async () => {
-		const callbackUrl = `http://localhost:${await freePort()}/callback`;
+		const callbackUrl = await fixedCallbackUrl("/callback", "localhost");
 		const { harness, notifications, opened } = await setup("follow", { callbackUrl, scope: "issues:read" });
 
 		await harness.session.prompt("/mcp login issues");
@@ -211,9 +219,10 @@ describe("AgentSession MCP OAuth", () => {
 		expect(notifications.at(-1)).toBe('Signed in to MCP server "issues" (1 tools).');
 		expect(opened[0].searchParams.get("redirect_uri")).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/oauth\/done$/);
 
-		const port = await freePort();
+		const port = Number(new URL(await fixedCallbackUrl("/oauth/done")).port);
 		const fixed = await setup("follow", { callbackUrl: "http://127.0.0.1/oauth/done", callbackPort: port });
 		await fixed.harness.session.prompt("/mcp login issues");
+		expect(fixed.notifications.at(-1)).toBe('Signed in to MCP server "issues" (1 tools).');
 		expect(fixed.opened[0].searchParams.get("redirect_uri")).toBe(`http://127.0.0.1:${port}/oauth/done`);
 	});
 
