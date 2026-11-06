@@ -319,3 +319,7 @@ tbody tr:hover { background: var(--blue-soft); }
   .dashboard-main { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } .metric-card:hover > svg, .refresh-button:active, .code-reset:active, .chart-tool:active, .metric-card:active { transform: none; } }
+
+.device-switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: white; color: var(--blue); font-weight: 500; }
+.device-switch:hover { background: var(--blue-soft); }
+@media (max-width: 700px) { .device-controls > strong { grid-column: 1; align-self: center; font-size: 13px; } .device-controls > .muted { grid-column: 1; } .device-switch { grid-column: 2; grid-row: 1 / 3; } }

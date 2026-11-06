@@ -139,8 +139,8 @@ function EvidenceContent({
 	);
 }
 
-export function ExecutionDetails({ message }: { message: ChatMessage }) {
-	const [open, setOpen] = useState(false);
+export function ExecutionDetails({ message, expanded = false }: { message: ChatMessage; expanded?: boolean }) {
+	const [open, setOpen] = useState(expanded);
 	const [bundle, setBundle] = useState<EvidenceBundle | null>(null);
 	const [error, setError] = useState("");
 	const [attempt, setAttempt] = useState(0);
@@ -162,15 +162,30 @@ export function ExecutionDetails({ message }: { message: ChatMessage }) {
 		const controller = new AbortController();
 		setError("");
 		void loadEvidence(message.id, controller.signal)
-			.then(setBundle)
+			.then((result) => {
+				if (!controller.signal.aborted) setBundle(result);
+			})
 			.catch((failure: unknown) => {
 				if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : "证据读取失败。");
 			});
 		return () => controller.abort();
 	}, [open, evidenceIds, message.id, attempt]);
-	if (!streaming && !steps.length) return null;
+	if (!streaming && !steps.length)
+		return (
+			<p className="analysis-empty">
+				{message.status === "error"
+					? "本轮请求失败，未取得工具调用记录。"
+					: message.status === "cancelled"
+						? "生成已停止，本轮无工具调用记录。"
+						: "本轮无工具调用记录。"}
+			</p>
+		);
 	return (
 		<div className="execution-details">
+			{message.status === "error" && <p className="evidence-warning">本轮请求失败，已取得的步骤与证据保留如下。</p>}
+			{message.status === "cancelled" && (
+				<p className="evidence-warning">生成已停止，已取得的步骤与证据保留如下。</p>
+			)}
 			{streaming && (
 				<output className="execution-progress" aria-live="polite">
 					{running

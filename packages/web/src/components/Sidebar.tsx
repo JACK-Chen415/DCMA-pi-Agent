@@ -23,17 +23,16 @@ export function Sidebar({
 }) {
 	return (
 		<aside
+			id="conversation-sidebar"
 			aria-label="会话历史"
-			className={`${open ? "flex fixed inset-y-0 left-0 bg-[#f4f7fb] shadow-xl z-40" : "hidden lg:flex"} w-[260px] h-full flex-col shrink-0 px-4 py-5`}
+			className={`conversation-sidebar${open ? " is-open" : ""}`}
 		>
 			<div className="flex items-center gap-3 mb-6">
-				<img src="/assets/logo.png" alt="DCMA Logo" className="w-9 h-9" />
 				<div className="flex-1">
-					<strong className="text-lg">DCMA</strong>
-					<p className="text-xs text-slate-500">工业故障诊断助手</p>
+					<strong className="text-[13px]">历史对话</strong>
 				</div>
 				{open && (
-					<button type="button" aria-label="关闭会话历史" onClick={onClose}>
+					<button type="button" aria-label="关闭会话历史" onClick={onClose} className="header-icon">
 						<X className="w-5 h-5" />
 					</button>
 				)}
@@ -46,7 +45,7 @@ export function Sidebar({
 				<Plus className="w-4 h-4" />
 				新建对话
 			</button>
-			<p className="text-xs text-slate-500 mb-3">最近对话 · {conversations.length}</p>
+			<p className="text-[11px] text-slate-500 mb-3">最近对话 · {conversations.length}</p>
 			<div className="flex-1 overflow-y-auto space-y-2">
 				{!conversations.length && <p className="text-xs text-slate-400 py-4">发送问题后，会话会自动保存到本机。</p>}
 				{conversations.map((item) => (
@@ -61,8 +60,8 @@ export function Sidebar({
 						>
 							<MessageSquare className="w-4 h-4 text-blue-600 shrink-0 mt-1" />
 							<div className="min-w-0 flex-1">
-								<p className="truncate text-[13px] font-medium">{item.title}</p>
-								<p className="text-[11px] text-slate-400 mt-1">
+								<p className="truncate text-xs font-medium">{item.title}</p>
+								<p className="text-[10px] text-slate-400 mt-1">
 									{new Date(item.time).toLocaleString("zh-CN", {
 										month: "2-digit",
 										day: "2-digit",

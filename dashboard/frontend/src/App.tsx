@@ -10,6 +10,7 @@ import { RecentEvents } from "./components/RecentEvents.tsx";
 import { CodeAnalysis } from "./components/CodeAnalysis.tsx";
 import { DateTimeInput } from "./components/DateTimeInput.tsx";
 import { SystemConfig } from "./components/SystemConfig.tsx";
+import { DevicePicker } from "./components/DevicePicker.tsx";
 
 const motorTables: DashboardTable[] = ["real_data_01", "real_data_02", "real_data_03", "real_data_04"];
 const runningFields: DashboardField[] = ["inverter_load_rate", "motor_load_rate", "fault_code", "alarm_code"];
@@ -53,6 +54,7 @@ function NavIcon({ path }: { path: string }) {
 
 export function App() {
 	const [view, setView] = useState<View>(currentView);
+	const [devicePickerOpen, setDevicePickerOpen] = useState(false);
 	const [initialTable] = useState(() => dashboardTables.find((table) => table === new URLSearchParams(window.location.search).get("table")) ?? "real_data_01");
 	const [motor, setMotor] = useState(initialTable === "real_data" ? 1 : Number(initialTable.slice(-2)));
 	const [history, setHistory] = useState(initialTable === "real_data");
@@ -72,6 +74,9 @@ export function App() {
 	const table = motor === 1 && history ? "real_data" : motorTables[motor - 1];
 	const browsingHistory = view === "query";
 	const realtime = useDashboard(table, limit, !browsingHistory && view !== "settings");
+	const pickerData = useDashboard(table, 100, devicePickerOpen && (browsingHistory || view === "settings"));
+	const deviceSources = (browsingHistory || view === "settings" ? pickerData.data : realtime.data)?.sources ?? [];
+	const deviceError = browsingHistory || view === "settings" ? pickerData.error : realtime.error;
 	const samples = useSampleHistory(table, limit, browsingHistory ? range : null, samplePage);
 	const { data, loading, error, refresh } = browsingHistory ? samples : realtime;
 	const update = browsingHistory ? !range ? "请选择时间范围" : loading ? "正在查询历史采样" : error ? "历史采样查询失败" : "历史采样 · 手动刷新" : table === "real_data" ? realtime.error ? "历史记录读取失败" : !realtime.data ? "等待历史记录读取" : !realtime.data.latest ? "暂无历史记录" : "历史记录 · 定期检查" : realtime.update;
@@ -97,6 +102,14 @@ export function App() {
 	});
 	return (
 		<div className="dashboard-shell">
+			{devicePickerOpen && <DevicePicker currentId={table} devices={dashboardTables.map((id) => {
+				const source = deviceSources.find((item) => item.table === id);
+				return { id, code: id, name: String(source?.latest?.raw.device_name || "等待设备数据"), sourceLabel: id === "real_data" ? "历史采集" : "模拟数据", image: `${import.meta.env.BASE_URL}assets/gen_photo.png`, assessment: source?.assessment };
+			})} error={deviceError} subtitle="选择设备与数据来源，查看对应的运行数据" onClose={() => setDevicePickerOpen(false)} onSelect={(id) => {
+				if (id === table) return;
+				resetRange(); setHistory(id === "real_data"); setMotor(id === "real_data" ? 1 : Number(id.slice(-2)));
+				const url = new URL(window.location.href); url.searchParams.set("table", id); window.history.replaceState(null, "", url);
+			}} />}
 			<aside className="sidebar">
 				<div className="brand"><img src={`${import.meta.env.BASE_URL}assets/logo.png`} alt="" /><div><strong>DCMA</strong><span>电机与变频器监控</span></div></div>
 				<p className="sidebar-caption">监控工作台</p>
@@ -104,10 +117,9 @@ export function App() {
 				<nav className="sidebar-nav" aria-label="监控页面">{views.map((item) => <a key={item.id} href={`#${item.id}`} aria-current={view === item.id ? "page" : undefined}><NavIcon path={item.icon} /><span>{item.title}</span>{view === item.id && <i aria-hidden="true" />}</a>)}</nav>
 				{view !== "settings" && <div className="device-controls">
 					<p className="sidebar-caption">当前监控设备</p>
-					<label className="sidebar-label" htmlFor="device">查看设备</label>
-					<select id="device" value={motor} onChange={(event) => { resetRange(); setMotor(Number(event.target.value)); }}>{motorTables.map((_, index) => <option key={index} value={index + 1}>G120 电机 {index + 1}</option>)}</select>
-					<label className="sidebar-label" htmlFor="source">数据来源</label>
-					<select id="source" value={motor === 1 && history ? "history" : "simulation"} disabled={motor !== 1} onChange={(event) => { resetRange(); setHistory(event.target.value === "history"); }}><option value="simulation">模拟数据</option>{motor === 1 && <option value="history">历史真实采集</option>}</select>
+					<strong>{String(latest?.raw.device_name || `G120 电机 ${motor}`)}</strong>
+					<span className="muted small">{sourceLabel}</span>
+					<button type="button" className="device-switch" onClick={() => setDevicePickerOpen(true)}>切换设备 <span aria-hidden="true">→</span></button>
 				</div>}
 				<div className="sidebar-footer"><span className={`connection ${view === "settings" ? "" : error ? "failed" : data ? "connected" : ""}`} />{view === "settings" ? "系统配置" : error ? "接口查询失败" : data ? "数据库查询成功" : browsingHistory && !range ? "等待历史查询" : "正在连接接口"}</div>
 			</aside>

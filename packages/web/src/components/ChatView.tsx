@@ -1,19 +1,20 @@
-import { Cpu, User } from "lucide-react";
+import { Cpu, ListChecks, User } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { timeToSeconds } from "../time-display.ts";
 import type { ChatMessage } from "../types.ts";
 import { AnalysisChartCard } from "./AnalysisChartCard";
-import { ExecutionDetails } from "./ExecutionDetails";
 import { MessageContent } from "./MessageContent";
 import { ReportActions } from "./ReportActions";
 export function ChatView({
 	messages,
 	isStreaming,
 	onRequery,
+	onViewAnalysis,
 }: {
 	messages: ChatMessage[];
 	isStreaming: boolean;
 	onRequery?: (text: string) => void;
+	onViewAnalysis: (messageId: string) => void;
 }) {
 	const bottom = useRef<HTMLDivElement>(null);
 	const last = messages.at(-1);
@@ -44,17 +45,22 @@ export function ChatView({
 						>
 							{message.role === "assistant" && (
 								<p className="text-[11px] text-slate-500 border-b border-slate-100 pb-2 mb-2">
-									{message.engine || "DCMA"} · {new Date(message.timestamp).toLocaleTimeString("zh-CN")}
+									{message.engine || "MSPIC-AI"} · {new Date(message.timestamp).toLocaleTimeString("zh-CN")}
 								</p>
 							)}
 							{message.role === "assistant" ? (
 								<MessageContent content={message.content} />
 							) : (
-								<div className="text-[13px] leading-relaxed whitespace-pre-wrap break-words">
+								<div className="text-xs leading-relaxed whitespace-pre-wrap break-words">
 									{timeToSeconds(message.content)}
 								</div>
 							)}
-							{message.role === "assistant" && <ExecutionDetails message={message} />}
+							{message.role === "assistant" && (
+								<button type="button" className="view-analysis" onClick={() => onViewAnalysis(message.id)}>
+									<ListChecks size={15} />
+									{message.status === "streaming" ? "查看分析过程 · 正在处理" : "查看分析过程"}
+								</button>
+							)}
 							{message.role === "assistant" &&
 								message.charts?.map((chart) => (
 									<AnalysisChartCard

@@ -92,14 +92,14 @@ export function ChatInput({
 		}
 	};
 	return (
-		<div className="shrink-0 px-3 sm:px-6 pb-4 pt-2">
-			<div className="relative max-w-[800px] mx-auto">
-				<div className="bg-white border border-slate-200 rounded-2xl p-2 flex gap-1 items-center shadow-sm focus-within:border-blue-400">
+		<div className="chat-composer">
+			<div className="composer-content">
+				<div className="composer-box">
 					<button
 						type="button"
 						onClick={onImport}
 						aria-label="上传遥测日志或设备档案 (CSV/LOG)"
-						className="shrink-0 p-2 text-slate-500 hover:bg-blue-50 rounded-xl"
+						className="composer-attachment"
 					>
 						<Paperclip className="w-4 h-4" />
 					</button>
@@ -116,9 +116,9 @@ export function ChatInput({
 							composing.current = false;
 						}}
 						disabled={disabled || listening}
-						placeholder="输入问题，Enter 发送，Shift+Enter 换行…"
-						rows={1}
-						className="min-w-0 flex-1 h-9 bg-transparent outline-none text-sm leading-5 resize-none overflow-y-auto px-2 py-2 disabled:opacity-50"
+						placeholder="描述设备问题、告警信息或你想查询的内容…"
+						rows={2}
+						className="composer-textarea"
 					/>
 					<button
 						type="button"
@@ -127,17 +127,13 @@ export function ChatInput({
 						aria-label={listening ? "结束语音输入" : "开始语音输入"}
 						aria-pressed={listening}
 						title="浏览器语音识别可能使用在线服务，识别文字确认后发送"
-						className={`shrink-0 min-h-11 min-w-11 p-2 rounded-xl disabled:opacity-40 ${listening ? "bg-red-50 text-red-700" : "text-slate-600 hover:bg-blue-50"}`}
+						className={`composer-voice${listening ? " is-listening" : ""}`}
 					>
 						<Mic className="w-4 h-4 mx-auto" />
+						<span>{listening ? "结束输入" : "语音输入"}</span>
 					</button>
 					{disabled && onStop ? (
-						<button
-							type="button"
-							aria-label="停止生成"
-							onClick={onStop}
-							className="p-2 bg-red-50 text-red-600 rounded-xl"
-						>
+						<button type="button" aria-label="停止生成" onClick={onStop} className="composer-send is-stop">
 							<Square className="w-4 h-4" />
 						</button>
 					) : (
@@ -146,20 +142,26 @@ export function ChatInput({
 							aria-label="发送问题"
 							disabled={disabled || !value.trim() || listening}
 							onClick={send}
-							className="p-2 bg-blue-600 text-white rounded-xl disabled:opacity-40"
+							className="composer-send"
 						>
 							<Send className="w-4 h-4" />
 						</button>
 					)}
 				</div>
-				<p className="mt-2 text-[11px] text-slate-500" aria-live="polite">
+				<p
+					className="composer-note"
+					aria-live="polite"
+					title={
+						voiceAvailable
+							? "AI 建议仅供参考，请结合现场工况和操作规范确认。语音由浏览器识别，可能使用在线服务；识别文字确认后发送。"
+							: "AI 建议仅供参考，请结合现场工况和操作规范确认。当前浏览器不支持语音输入，可继续使用键盘。"
+					}
+				>
 					{listening
 						? preparing
-							? "正在检查麦克风访问，请处理浏览器的权限提示。"
-							: "正在听，请说话；结束后可编辑文字再发送。"
-						: voiceAvailable
-							? "语音由浏览器识别，可能使用在线服务；识别文字确认后发送。"
-							: "当前浏览器不支持语音输入，可继续使用键盘。"}
+							? "正在检查麦克风权限…"
+							: "正在听，结束后可编辑文字再发送。"
+						: "AI 建议仅供参考，请结合现场工况和操作规范确认。"}
 				</p>
 				{voiceError && (
 					<div className="mt-2 text-xs space-y-2">

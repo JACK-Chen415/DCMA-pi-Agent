@@ -1,52 +1,94 @@
-import { Activity, Menu, Settings } from "lucide-react";
+import { Activity, ListChecks, PanelLeft, Plus, Settings, SlidersHorizontal } from "lucide-react";
 import type { BackendStatus } from "../types.ts";
+
 export function Header({
 	onOpenSettings,
-	onOpenHistory,
+	onToggleHistory,
 	onOpenPanel,
+	onNewChat,
+	onSwitchDevice,
+	onRealtime,
+	sidebarOpen,
+	hasAnalysis,
 	status,
 }: {
 	onOpenSettings: () => void;
-	onOpenHistory: () => void;
+	onToggleHistory: () => void;
 	onOpenPanel: () => void;
+	onNewChat: () => void;
+	onSwitchDevice: () => void;
+	onRealtime: () => void;
+	sidebarOpen: boolean;
+	hasAnalysis: boolean;
 	status: BackendStatus;
 }) {
 	return (
-		<header className="h-16 shrink-0 flex items-center justify-between gap-2 px-4 sm:px-6">
-			<div className="flex items-center gap-2 min-w-0">
+		<header className="app-header">
+			<div className="header-brand">
 				<button
 					type="button"
-					aria-label="打开会话历史"
-					onClick={onOpenHistory}
-					className="lg:hidden p-2 bg-white rounded-xl"
+					className="header-icon"
+					aria-label={sidebarOpen ? "收起会话历史" : "展开会话历史"}
+					aria-expanded={sidebarOpen}
+					aria-controls="conversation-sidebar"
+					onClick={onToggleHistory}
 				>
-					<Menu className="w-5 h-5" />
+					<PanelLeft size={20} />
 				</button>
-				<span className="text-xs text-slate-500 truncate">DCMA Agent 模型对话</span>
+				<button type="button" className="header-new" onClick={onNewChat} aria-label="新对话" title="新对话">
+					<Plus size={17} />
+					<span>新对话</span>
+				</button>
+				<img src="/assets/logo.png" alt="MSPIC-AI 标识" />
+				<div className="brand-copy">
+					<strong>MSPIC-AI</strong>
+					<p>DCMA 工业运行诊断系统 · 基于 Agent 的智能分析</p>
+				</div>
 			</div>
-			<div className="flex items-center gap-2 shrink-0">
-				<span
-					title={status.message}
-					className="text-[11px] rounded-full bg-white border border-slate-200 px-3 py-2 flex gap-2 items-center"
-				>
-					<span className={`h-2 w-2 rounded-full ${status.connected ? "bg-emerald-500" : "bg-amber-500"}`} />
-					{status.connected ? "服务已连接" : "服务未连接"}
+			<div className="header-tools">
+				<span className="service-status" title={status.message}>
+					<i data-connected={status.connected} />
+					<span>{status.connected ? "服务已连接" : "服务未连接"}</span>
 				</span>
 				<button
 					type="button"
-					onClick={onOpenPanel}
-					aria-label="打开设备看板"
-					className="xl:hidden p-2 rounded-xl bg-white border border-slate-200"
+					className="header-action"
+					onClick={onSwitchDevice}
+					aria-label="切换设备"
+					title="切换设备"
 				>
-					<Activity className="w-4 h-4" />
+					<SlidersHorizontal size={17} />
+					<span>切换设备</span>
 				</button>
 				<button
 					type="button"
-					onClick={onOpenSettings}
-					aria-label="系统设置与DCMA Agent配置"
-					className="p-2 rounded-xl bg-white border border-slate-200"
+					className="header-action header-realtime"
+					onClick={onRealtime}
+					aria-label="实时数据"
+					title="实时数据"
 				>
-					<Settings className="w-4 h-4" />
+					<Activity size={17} />
+					<span>实时数据</span>
+				</button>
+				{hasAnalysis && (
+					<button
+						type="button"
+						className="header-icon analysis-toggle"
+						onClick={onOpenPanel}
+						aria-label="打开分析过程"
+						title="分析过程"
+					>
+						<ListChecks size={19} />
+					</button>
+				)}
+				<button
+					type="button"
+					className="header-icon"
+					onClick={onOpenSettings}
+					aria-label="系统设置与MSPIC-AI配置"
+					title="设置"
+				>
+					<Settings size={19} />
 				</button>
 			</div>
 		</header>

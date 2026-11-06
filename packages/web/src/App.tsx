@@ -11,19 +11,22 @@ import { Sidebar } from "./components/Sidebar";
 import { TelemetryModal } from "./components/TelemetryModal";
 import { WelcomeView } from "./components/WelcomeView";
 import { createConversationStorage } from "./conversation-storage.ts";
-import { dashboardTables, databaseDataset, databaseDevice, databaseMetrics, useDashboard } from "./dashboard-data.ts";
+import { dashboardTables, databaseDataset, databaseDevice, useDashboard } from "./dashboard-data.ts";
 import { downloadText, exportStatusEvent } from "./download.ts";
 import { createMessageId } from "./message-id.ts";
 import { loadWorkspace, storageKey } from "./storage.ts";
-import { getMetrics, parseTelemetry, telemetryCsv } from "./telemetry.ts";
+import { parseTelemetry, telemetryCsv } from "./telemetry.ts";
 import type { AppSettings, BackendStatus, ChatMessage } from "./types.ts";
 
 export function App() {
 	const [workspace, setWorkspace] = useState(loadWorkspace);
 	const [backend, setBackend] = useState<BackendStatus>({ connected: false, models: [], message: "正在连接本地服务" });
 	const [modal, setModal] = useState<"device" | "telemetry" | "settings" | "import" | null>(null);
-	const [sidebarOpen, setSidebarOpen] = useState(false);
+	const [sidebarOpen, setSidebarOpen] = useState(() => window.matchMedia("(min-width: 1024px)").matches);
 	const [panelOpen, setPanelOpen] = useState(false);
+	const [analysisSelection, setAnalysisSelection] = useState<{ conversationId: string; messageId: string } | null>(
+		null,
+	);
 	const [notice, setNotice] = useState("");
 	const [storageError, setStorageError] = useState("");
 	const [historyError, setHistoryError] = useState("");
@@ -54,17 +57,26 @@ export function App() {
 	const device = devices.find((item) => item.id === table)!;
 	const offline = workspace.offlineDeviceId === table && !!workspace.datasets[table]?.imported;
 	const dataset = offline ? workspace.datasets[table] : databaseDataset(table, live.data);
-	const dataMessage = live.error
-		? `${live.data ? "刷新失败，保留上次成功数据。" : "未取得数据库数据。"}${live.error}`
-		: live.data?.sources.find((source) => source.table === table)?.message || live.update;
-	const checkedAt = live.data ? new Date(live.data.queriedAt).toLocaleString("zh-CN") : "尚未查询成功";
 	const conversation = workspace.conversations.find((item) => item.id === workspace.activeId);
+	const analysisMessage =
+		(analysisSelection?.conversationId === conversation?.id
+			? conversation?.messages.find((message) => message.id === analysisSelection?.messageId)
+			: undefined) ?? conversation?.messages.findLast((message) => message.role === "assistant");
 	const generatingConversations = workspace.conversations.filter((item) =>
 		item.messages.some((message) => message.role === "assistant" && message.status === "streaming"),
 	);
 	const busy = generatingConversations.length > 0;
 	const isStreaming = generatingConversations.some((item) => item.id === workspace.activeId);
 	const settings = workspace.settings;
+	useEffect(() => {
+		const media = window.matchMedia("(min-width: 1024px)");
+		const resize = () => {
+			setSidebarOpen(media.matches);
+			setPanelOpen(false);
+		};
+		media.addEventListener("change", resize);
+		return () => media.removeEventListener("change", resize);
+	}, []);
 	const followReply = useCallback(
 		async (id: string, assistantId: string, controller: AbortController, payload?: unknown) => {
 			const updateReply = (update: (message: ChatMessage) => ChatMessage) => {
@@ -233,7 +245,9 @@ export function App() {
 	};
 	const newChat = () => {
 		setWorkspace((state) => ({ ...state, activeId: null }));
-		setSidebarOpen(false);
+		setAnalysisSelection(null);
+		setPanelOpen(false);
+		if (!window.matchMedia("(min-width: 1024px)").matches) setSidebarOpen(false);
 	};
 	const refreshModels = async () => {
 		try {
@@ -266,6 +280,7 @@ export function App() {
 			return;
 		}
 		const controller = new AbortController();
+		setAnalysisSelection(null);
 		let id = conversation?.id ?? "";
 		let assistantId = "";
 		try {
@@ -286,7 +301,7 @@ export function App() {
 				content: "",
 				timestamp: now,
 				status: "streaming",
-				engine: `DCMA Agent · ${settings.model}`,
+				engine: `MSPIC-AI · ${settings.model}`,
 			};
 			const next = {
 				...workspace,
@@ -395,15 +410,15 @@ export function App() {
 		setModal(null);
 		setNotice("配置已应用并保存");
 	};
-	const quickAction = (action: string) => {
-		const queries: Record<string, string> = {
-			generate_report: `生成${device.name}的运行数据分析报表`,
-			parse_fault_code: `分析${device.name}的故障排查流程，并说明故障码解析所需信息`,
-			device_archive: `查询${device.name}（${device.code}）的设备台账档案`,
-			maintenance_advice: `基于当前数据给出${device.name}的维护建议`,
-		};
-		void sendMessage(queries[action] ?? action);
-		setPanelOpen(false);
+	const openRealtime = () => {
+		stop();
+		try {
+			localStorage.setItem(storageKey, JSON.stringify(workspaceRef.current));
+		} catch {
+			setNotice("会话尚未保存，请先导出会话后再打开展板。");
+			return;
+		}
+		window.location.assign(`/dashboard/?table=${table}#realtime`);
 	};
 	const openImport = () => {
 		setImportError("");
@@ -440,120 +455,126 @@ export function App() {
 			</main>
 		);
 	return (
-		<div className="flex h-dvh w-full overflow-hidden bg-[#f4f7fb] text-slate-800 font-sans">
-			{(sidebarOpen || panelOpen) && (
-				<button
-					type="button"
-					aria-label="关闭侧边面板"
-					className="fixed inset-0 z-30 bg-slate-900/30"
-					onClick={() => {
-						setSidebarOpen(false);
-						setPanelOpen(false);
-					}}
-				/>
-			)}
-			<Sidebar
-				conversations={[...workspace.conversations].sort((a, b) => b.time.localeCompare(a.time))}
-				activeId={workspace.activeId}
+		<div className="app-shell">
+			<Header
+				onOpenSettings={() => setModal("settings")}
+				onToggleHistory={() => {
+					setSidebarOpen((open) => !open);
+					setPanelOpen(false);
+				}}
+				onOpenPanel={() => {
+					setPanelOpen(true);
+					if (!window.matchMedia("(min-width: 1024px)").matches) setSidebarOpen(false);
+				}}
 				onNewChat={newChat}
-				onSelectConversation={(id) => {
-					const item = workspace.conversations.find((entry) => entry.id === id);
-					setWorkspace((state) => ({ ...state, activeId: id, deviceId: item?.deviceId ?? state.deviceId }));
-					setSidebarOpen(false);
-				}}
-				onRename={(id) => {
-					setRenameId(id);
-					setRenameValue(workspace.conversations.find((item) => item.id === id)?.title ?? "");
-				}}
-				onDelete={setDeleteId}
-				onExport={() =>
-					downloadText(
-						"DCMA-conversations.json",
-						JSON.stringify(workspace.conversations, null, 2),
-						"application/json;charset=utf-8",
-					)
-				}
-				open={sidebarOpen}
-				onClose={() => setSidebarOpen(false)}
-			/>
-			<main className="flex-1 min-w-0 h-full flex flex-col overflow-hidden">
-				<Header
-					onOpenSettings={() => setModal("settings")}
-					onOpenHistory={() => setSidebarOpen(true)}
-					onOpenPanel={() => setPanelOpen(true)}
-					status={backend}
-				/>
-				<div className="px-4 sm:px-6 text-[11px] text-slate-500 pb-2 flex flex-wrap gap-x-3">
-					<span>
-						{device.name} · {dataset.source}
-					</span>
-					<span>{offline ? "当前为离线导入数据；展板使用 MySQL" : "Agent 与展板使用同一 MySQL 数据来源"}</span>
-					{!backend.models.length && <span className="text-amber-700">模型尚未授权，请打开设置</span>}
-				</div>
-				{(notice || storageError || historyError) && (
-					<output className="block mx-4 mb-2 p-2 rounded-xl bg-amber-50 text-amber-800 text-xs">
-						{historyError || storageError || notice}
-					</output>
-				)}
-				{conversation ? (
-					<ChatView
-						messages={conversation.messages}
-						isStreaming={isStreaming}
-						onRequery={(text) => {
-							void sendMessage(text);
-						}}
-					/>
-				) : (
-					<WelcomeView
-						onSelectSuggestion={(text) => {
-							void sendMessage(text);
-						}}
-					/>
-				)}
-				{busy && !isStreaming && (
-					<output className="mx-4 text-xs text-slate-500">
-						{generatingConversations.length} 个会话正在后台生成，可在当前会话继续提问。
-					</output>
-				)}
-				<ChatInput
-					key={workspace.activeId ?? "new-chat"}
-					onSendMessage={(text) => {
-						void sendMessage(text);
-					}}
-					disabled={isStreaming}
-					onStop={isStreaming ? () => stop() : undefined}
-					onImport={openImport}
-				/>
-			</main>
-			<RightPanel
-				device={device}
-				metrics={offline ? getMetrics(dataset.samples, settings.alarmThreshold) : databaseMetrics(live.data)}
-				dataset={dataset}
-				threshold={settings.alarmThreshold}
-				checkedAt={checkedAt}
-				intervalMs={3000}
-				databaseMessage={offline ? undefined : dataMessage}
 				onSwitchDevice={() => setModal("device")}
-				onViewMoreTelemetry={() => {
-					stop();
-					try {
-						localStorage.setItem(storageKey, JSON.stringify(workspace));
-					} catch {
-						setNotice("会话尚未保存，请先导出会话后再打开展板。");
-						return;
-					}
-					window.location.assign(`/dashboard/?table=${table}#realtime`);
-				}}
-				onQuickAction={quickAction}
-				onImport={openImport}
-				onRestoreDemo={() => {
-					setWorkspace((state) => ({ ...state, offlineDeviceId: undefined }));
-					setNotice("已返回数据库数据；原始上传文件不会被修改");
-				}}
-				disabled={isStreaming}
-				open={panelOpen}
-				onClose={() => setPanelOpen(false)}
+				onRealtime={openRealtime}
+				sidebarOpen={sidebarOpen}
+				hasAnalysis={!!analysisMessage}
+				status={backend}
 			/>
+			<div className="app-body">
+				{(sidebarOpen || panelOpen) && (
+					<button
+						type="button"
+						aria-label="关闭侧边面板"
+						className="workspace-backdrop"
+						onClick={() => {
+							setSidebarOpen(false);
+							setPanelOpen(false);
+						}}
+					/>
+				)}
+				<Sidebar
+					conversations={[...workspace.conversations].sort((a, b) => b.time.localeCompare(a.time))}
+					activeId={workspace.activeId}
+					onNewChat={newChat}
+					onSelectConversation={(id) => {
+						const item = workspace.conversations.find((entry) => entry.id === id);
+						setWorkspace((state) => ({ ...state, activeId: id, deviceId: item?.deviceId ?? state.deviceId }));
+						setAnalysisSelection(null);
+						setPanelOpen(false);
+						if (!window.matchMedia("(min-width: 1024px)").matches) setSidebarOpen(false);
+					}}
+					onRename={(id) => {
+						setRenameId(id);
+						setRenameValue(workspace.conversations.find((item) => item.id === id)?.title ?? "");
+					}}
+					onDelete={setDeleteId}
+					onExport={() =>
+						downloadText(
+							"DCMA-conversations.json",
+							JSON.stringify(workspace.conversations, null, 2),
+							"application/json;charset=utf-8",
+						)
+					}
+					open={sidebarOpen}
+					onClose={() => setSidebarOpen(false)}
+				/>
+				<main className="chat-main">
+					<div className="device-context">
+						<span>
+							{device.name} · {dataset.source}
+						</span>
+						<span>{offline ? "当前为离线导入数据；展板使用 MySQL" : "Agent 与展板使用同一 MySQL 数据来源"}</span>
+						{offline && (
+							<button
+								type="button"
+								onClick={() => {
+									setWorkspace((state) => ({ ...state, offlineDeviceId: undefined }));
+									setNotice("已返回数据库数据；原始上传文件不会被修改");
+								}}
+							>
+								返回数据库数据
+							</button>
+						)}
+						{!backend.models.length && <span className="text-amber-700">模型尚未授权，请打开设置</span>}
+					</div>
+					{(notice || storageError || historyError) && (
+						<output className="block mx-4 mb-2 p-2 rounded-xl bg-amber-50 text-amber-800 text-xs">
+							{historyError || storageError || notice}
+						</output>
+					)}
+					{conversation ? (
+						<ChatView
+							messages={conversation.messages}
+							isStreaming={isStreaming}
+							onViewAnalysis={(messageId) => {
+								setAnalysisSelection({ conversationId: conversation.id, messageId });
+								setPanelOpen(true);
+								if (!window.matchMedia("(min-width: 1024px)").matches) setSidebarOpen(false);
+							}}
+							onRequery={(text) => {
+								void sendMessage(text);
+							}}
+						/>
+					) : (
+						<WelcomeView
+							deviceName={device.name === "等待设备数据" ? "所选设备" : device.name}
+							onSelectSuggestion={(text) => {
+								void sendMessage(text);
+							}}
+						/>
+					)}
+					{busy && !isStreaming && (
+						<output className="mx-4 text-xs text-slate-500">
+							{generatingConversations.length} 个会话正在后台生成，可在当前会话继续提问。
+						</output>
+					)}
+					<ChatInput
+						key={workspace.activeId ?? "new-chat"}
+						onSendMessage={(text) => {
+							void sendMessage(text);
+						}}
+						disabled={isStreaming}
+						onStop={isStreaming ? () => stop() : undefined}
+						onImport={openImport}
+					/>
+				</main>
+				{analysisMessage && (
+					<RightPanel message={analysisMessage} open={panelOpen} onClose={() => setPanelOpen(false)} />
+				)}
+			</div>
 			{modal === "device" && (
 				<DeviceModal
 					currentDevice={device}
@@ -561,6 +582,8 @@ export function App() {
 					onClose={() => setModal(null)}
 					onSelectDevice={(selected) => {
 						stop();
+						setAnalysisSelection(null);
+						setPanelOpen(false);
 						setWorkspace((state) => ({ ...state, deviceId: selected.id, activeId: null }));
 					}}
 				/>
