@@ -126,7 +126,11 @@ function selectedMetrics(data: Data, claim: Claim): Data[] {
 function label(metric: Data): string {
 	const name = fieldLabels[metric.metric as keyof typeof fieldLabels];
 	if (!name) throw new ToolInputError("证据测点无效。");
-	return `${name}${metric.unit ? `（${text(metric.unit)}）` : "（单位未取得）"}`;
+	return name;
+}
+
+function formatWithUnit(metric: Data, value: number): string {
+	return `${format(value)}${metric.unit ? ` (${text(metric.unit)})` : " (单位未取得)"}`;
 }
 
 /** Only typed, evidence-backed facts reach this renderer; no model-authored prose or numbers are accepted. */
@@ -219,7 +223,7 @@ export function renderAnalysis(value: unknown, records: EvidenceRecord[]): strin
 										.map((entry) => number(entry.mean)),
 								);
 							if (!means.length) return `${label(metric)}没有可用的汇总趋势。`;
-							return `${label(metric)}每${format(step / 60)}分钟汇总均值为${format(Math.min(...means))}～${format(Math.max(...means))}。`;
+							return `${label(metric)}每${format(step / 60)}分钟汇总均值为${format(Math.min(...means))}～${format(Math.max(...means))} (${metric.unit ? text(metric.unit) : "单位未取得"})。`;
 						})
 						.join(" ");
 					limits.add("汇总趋势只说明对应时间尺度，不能排除时段内的短时升温或跳变。");
@@ -227,16 +231,24 @@ export function renderAnalysis(value: unknown, records: EvidenceRecord[]): strin
 					const rows = metrics
 						.map(
 							(metric) =>
-								`| ${label(metric)} | ${metric.mean === null ? "无有效值" : format(metric.mean)} | ${metric.min === null ? "—" : format(metric.min)} | ${metric.max === null ? "—" : format(metric.max)} | ${format(metric.count)}/${format(metric.missing)} |`,
+								`| ${label(metric)} | ${metric.mean === null ? "无有效值" : formatWithUnit(metric, metric.mean as number)} | ${metric.min === null ? "—" : formatWithUnit(metric, metric.min as number)} | ${metric.max === null ? "—" : formatWithUnit(metric, metric.max as number)} | ${format(metric.count)}/${format(metric.missing)} |`,
 						)
 						.join("\n");
 					body = `| 指标 | 均值 | 最小值 | 最大值 | 有效/缺失 |\n| --- | --- | --- | --- | --- |\n${rows}`;
+				} else if (metrics.length > 1) {
+					const rows = metrics
+						.map(
+							(metric) =>
+								`| ${label(metric)} | ${metric.mean === null ? "无有效值" : formatWithUnit(metric, metric.mean as number)} | ${metric.min === null ? "—" : formatWithUnit(metric, metric.min as number)} | ${metric.max === null ? "—" : formatWithUnit(metric, metric.max as number)} |`,
+						)
+						.join("\n");
+					body = `| 关键指标 | 均值 | 最小值 | 最大值 |\n| :--- | :--- | :--- | :--- |\n${rows}`;
 				} else
 					body = `${metrics
 						.map((metric) =>
 							metric.mean === null
 								? `${label(metric)}没有有效采样`
-								: `${label(metric)}平均${format(metric.mean)}，范围${format(metric.min)}～${format(metric.max)}`,
+								: `${label(metric)}平均${formatWithUnit(metric, metric.mean as number)}，范围${formatWithUnit(metric, metric.min as number)}～${formatWithUnit(metric, metric.max as number)}`,
 						)
 						.join("；")}。`;
 			}
@@ -250,23 +262,33 @@ export function renderAnalysis(value: unknown, records: EvidenceRecord[]): strin
 			title = "故障与报警";
 			if (claim.kind === "events") {
 				body = `故障事件${data.faults === null ? "数量未知" : `${format(data.faults)}次`}，报警事件${data.alarms === null ? "数量未知" : `${format(data.alarms)}次`}；未结束事件${data.open === null ? "数量未知" : `${format(data.open)}次`}。`;
-				body += list(data.codes)
-					.map((entry) => {
-						const definitions = records.flatMap((source) => {
-							if (!["search_fault_knowledge", "lookup_fault_code"].includes(source.tool)) return [];
-							const result = object(source.result);
-							return list(source.tool === "search_fault_knowledge" ? result.results : result.matches)
-								.filter((item) =>
-									source.tool === "search_fault_knowledge"
-										? Array.isArray(item.codes) && item.codes.includes(entry.code)
-										: item.code === entry.code &&
-											object(source.input).kind === (entry.field === "fault_code" ? "fault" : "alarm"),
-								)
-								.map((item) => citeManual(source, item));
-						});
-						return ` ${entry.field === "fault_code" ? "故障码" : "报警码"}${text(entry.code)}记录${format(entry.count)}次，累计观察跨度${format(number(entry.durationMs) / 3600000)}小时、平均每次${format(number(entry.durationMs) / number(entry.count) / 60000)}分钟。${definitions.length ? definitions.filter(Boolean).join(" ") : "含义未确认，尚未取得适用的手册解释。"}`;
-					})
-					.join("");
+				const codesList = list(data.codes);
+				if (codesList.length > 0) {
+					const rows = codesList
+						.map((entry) => {
+							const definitions = records.flatMap((source) => {
+								if (!["search_fault_knowledge", "lookup_fault_code"].includes(source.tool)) return [];
+								const result = object(source.result);
+								return list(source.tool === "search_fault_knowledge" ? result.results : result.matches)
+									.filter((item) =>
+										source.tool === "search_fault_knowledge"
+											? Array.isArray(item.codes) && item.codes.includes(entry.code)
+											: item.code === entry.code &&
+												object(source.input).kind === (entry.field === "fault_code" ? "fault" : "alarm"),
+									)
+									.map((item) => citeManual(source, item));
+							});
+							const meaning = definitions.length
+								? definitions.filter(Boolean).join(" ")
+								: "含义未确认，尚未取得适用的手册解释。";
+							const type = entry.field === "fault_code" ? "故障" : "报警";
+							const duration = `${format(number(entry.durationMs) / 3600000)}小时`;
+							const avg = `${format(number(entry.durationMs) / number(entry.count) / 60000)}分钟`;
+							return `| ${type} | \`${text(entry.code)}\` | ${format(entry.count)}次 | ${duration} | ${avg} | ${meaning} |`;
+						})
+						.join("\n");
+					body += `\n\n| 类型 | 代码 | 频次 | 累计跨度 | 平均时长 | 手册依据 |\n| :--- | :--- | :--- | :--- | :--- | :--- |\n${rows}`;
+				}
 				if (list(data.codes).length) limits.add(manualLimit);
 			} else {
 				if (!claim.code) throw new ToolInputError("event_pattern必须指定证据中的原码code。");
@@ -404,7 +426,7 @@ export function renderAnalysis(value: unknown, records: EvidenceRecord[]): strin
 		)
 			attachments.push(`后台监测操作尚未启用，请核对后[确认监测操作](${result.approvalPath})。`);
 	}
-	const answer = `${plan.format === "report" ? "# 设备运行分析报告\n\n" : ""}${range ? `${range}\n\n` : ""}${content}${limits.size ? `\n\n限制说明：${[...limits].join(" ")}` : ""}${attachments.length ? `\n\n${attachments.join(" · ")}` : ""}`;
+	const answer = `${plan.format === "report" ? "# 设备运行分析报告\n\n" : ""}${range ? `> 📌 **分析时段**：${range}\n\n` : ""}${content}${limits.size ? `\n\n> 💡 **限制说明**：${[...limits].join(" ")}` : ""}${attachments.length ? `\n\n${attachments.join(" · ")}` : ""}`;
 	if (Buffer.byteLength(answer) > 40000) throw new ToolInputError("交付内容过长，请减少重复结论。");
 	return answer;
 }

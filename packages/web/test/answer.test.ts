@@ -32,7 +32,8 @@ test("renderer preserves exact counts and configured units without inventing ran
 	const { record, plan } = fixture();
 	const output = renderAnalysis(plan, [record]);
 	assert.match(output, /151201条/);
-	assert.match(output, /平均38，范围38～38/);
+	assert.match(output, /平均38 \(℃\)/);
+	assert.match(output, /范围38 \(℃\)～38 \(℃\)/);
 	assert.match(output, /℃/);
 	assert.doesNotMatch(output, /最平稳|偏小|已确认|用户配置|数据覆盖完整|完整采样/);
 	const report = renderAnalysis({ ...plan, format: "report" }, [record]);
