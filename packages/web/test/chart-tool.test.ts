@@ -102,6 +102,30 @@ test("drawing reuses the exact query window and enforces evidence ownership and 
 		};
 	};
 	try {
+		const defaultServices = createIndustrialServices(join(directory, "new-deployment"));
+		try {
+			const defaultTools = createIndustrialTools("real_data_01", defaultServices);
+			const response = await defaultTools
+				.find((tool) => tool.name === "summarize_metrics")!
+				.execute("fixture", { from, to, metrics: ["motor_temp"] }, undefined, undefined, {} as never);
+			const result = JSON.parse(
+				response.content
+					.filter((item) => item.type === "text")
+					.map((item) => item.text)
+					.join(""),
+			) as {
+				ok: boolean;
+				evidenceId: string;
+				result: { metrics: { unit: string; unitStatus: string }[]; unitBasis: string };
+			};
+			assert.equal(result.ok, true);
+			assert.equal(result.result.metrics[0].unit, "°C");
+			assert.equal(result.result.metrics[0].unitStatus, "project_defined");
+			assert.equal(result.result.unitBasis, "project_contract");
+			reads = 0;
+		} finally {
+			await defaultServices.monitoring.stop();
+		}
 		const query = await invoke("summarize_metrics", { from, to, metrics: ["motor_temp"] });
 		assert.equal(query.ok, true);
 		assert.equal(query.result.metrics[0].unit, "°C");

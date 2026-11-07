@@ -5,6 +5,7 @@ import type {
 	DeviceAssessment,
 	NumericField,
 } from "../../../dashboard/database/dashboard-types.ts";
+import { measurementUnits } from "../../../dashboard/database/measurement-units.ts";
 import type { Dataset, Device, MetricData } from "./types.ts";
 
 export type { DashboardTable } from "../../../dashboard/database/dashboard-types.ts";
@@ -63,10 +64,10 @@ export function databaseDataset(table: DashboardTable, data: DashboardData | nul
 
 export function databaseMetrics(data: DashboardData | null): MetricData[] {
 	const fields: { id: MetricData["id"]; field: NumericField; label: string; unit: string }[] = [
-		{ id: "temperature", field: "motor_temp", label: "电机温度", unit: "℃" },
-		{ id: "voltage", field: "dc_voltage", label: "直流电压", unit: "V" },
-		{ id: "current", field: "current_actual", label: "实际电流", unit: "A" },
-		{ id: "speed", field: "speed_actual", label: "实际转速", unit: "rpm" },
+		{ id: "temperature", field: "motor_temp", label: "电机温度", unit: measurementUnits.motor_temp },
+		{ id: "voltage", field: "dc_voltage", label: "直流电压", unit: measurementUnits.dc_voltage },
+		{ id: "current", field: "current_actual", label: "实际电流", unit: measurementUnits.current_actual },
+		{ id: "speed", field: "speed_actual", label: "实际转速", unit: measurementUnits.speed_actual },
 	];
 	return fields.map(({ id, field, label, unit }) => {
 		const value = data?.latest?.values[field] ?? null;

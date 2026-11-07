@@ -20,7 +20,6 @@ interface StoredVectorIndex {
 }
 
 const knowledgeDirectory = dirname(fileURLToPath(new URL("./knowledge/data/knowledge.jsonl", import.meta.url)));
-const indexPath = resolve(knowledgeDirectory, "vectors.json");
 const batchSize = 32;
 const maxAttempts = 3;
 let vectorIndexPromise: Promise<StoredVectorIndex | null> | undefined;
@@ -74,7 +73,7 @@ function isStoredVectorIndex(value: unknown): value is StoredVectorIndex {
 
 async function loadStoredIndex(): Promise<StoredVectorIndex | null> {
 	try {
-		const value: unknown = JSON.parse(await readFile(indexPath, "utf8"));
+		const value: unknown = JSON.parse(await readFile(getVectorIndexPath(), "utf8"));
 		return isStoredVectorIndex(value) ? value : null;
 	} catch (error) {
 		if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
@@ -155,6 +154,7 @@ export async function buildFaultKnowledgeVectorIndex(records: FaultKnowledgeReco
 		dimensions,
 		items: vectors,
 	};
+	const indexPath = getVectorIndexPath();
 	await mkdir(dirname(indexPath), { recursive: true });
 	const temporaryPath = `${indexPath}.${randomUUID()}.tmp`;
 	await writeFile(temporaryPath, JSON.stringify(index), "utf8");
@@ -210,5 +210,5 @@ export function vectorIndexMatches(
 }
 
 export function getVectorIndexPath(): string {
-	return indexPath;
+	return resolve(knowledgeDirectory, process.env.EMBEDDING_INDEX_PATH?.trim() || "vectors.json");
 }

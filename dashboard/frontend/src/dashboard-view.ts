@@ -1,12 +1,7 @@
 import { fieldLabels, type DashboardField, type DashboardRecord } from "./database-types.ts";
+import { measurementUnits } from "../../database/measurement-units.ts";
 
-export const fieldUnits: Partial<Record<DashboardField, string>> = {
-	dc_voltage: "V", speed_setpoint: "rpm", speed_actual: "rpm", current_actual: "A",
-	torque_setpoint: "N·m", torque_actual: "N·m", air_intake_temp: "°C", motor_temp: "°C",
-	inverter_temp: "°C", actual_power: "kW", field_current: "A", torque_current: "A",
-	inverter_radiator_temp: "°C", inverter_load_rate: "%", motor_load_rate: "%",
-	motor_power: "kW", feedback_power: "kW", pulse_frequency: "kHz",
-};
+export const fieldUnits: Partial<Record<DashboardField, string>> = measurementUnits;
 
 export function displayFieldLabel(field: DashboardField): string {
 	return fieldUnits[field] ? `${fieldLabels[field]}（${fieldUnits[field]}）` : fieldLabels[field];

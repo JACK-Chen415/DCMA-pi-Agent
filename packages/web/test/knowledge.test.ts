@@ -19,6 +19,44 @@ const definition = {
 };
 const input = { manufacturer: "Synthetic", model: "M1", version: "1", code: "F_TEST", kind: "fault" as const };
 
+test("missing private profiles retain project measurement units for all five sources without inventing device identity", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "dcma-units-"));
+	try {
+		const service = createKnowledgeService(directory);
+		for (const table of ["real_data", "real_data_01", "real_data_02", "real_data_03", "real_data_04"] as const) {
+			const profile = await service.getDeviceProfile(table);
+			assert.equal(profile.configured, false);
+			assert.equal(profile.manufacturer, null);
+			assert.equal(profile.stateRules, null);
+			assert.equal(profile.measurements.find((item) => item.field === "motor_temp")?.unit, "°C");
+			assert.equal(profile.measurements.find((item) => item.field === "speed_actual")?.unit, "r/min");
+			assert.equal(profile.measurements.find((item) => item.field === "actual_power")?.unit, "kW");
+			assert.equal(profile.measurements.find((item) => item.field === "motor_load_rate")?.unit, "%");
+			assert.ok(profile.measurements.every((item) => item.unitStatus === "project_defined"));
+		}
+		await writeFile(
+			join(directory, "profiles.json"),
+			JSON.stringify({
+				profiles: [
+					{
+						table: "real_data",
+						manufacturer: null,
+						model: null,
+						version: null,
+						source: "synthetic custom acquisition contract",
+						units: { actual_power: "W" },
+					},
+				],
+			}),
+		);
+		const custom = await service.getDeviceProfile("real_data");
+		assert.equal(custom.measurements.find((item) => item.field === "actual_power")?.unit, "W");
+		assert.equal(custom.measurements.find((item) => item.field === "motor_temp")?.unit, null);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
 test("simulation setup configures units for four sources without inventing real identities or overwriting profiles", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "dcma-simulation-"));
 	try {
