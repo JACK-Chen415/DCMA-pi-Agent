@@ -116,7 +116,22 @@ function manualText(record: EvidenceRecord, item: Data): string {
 		record.tool === "search_fault_knowledge"
 			? { title: item.source_file, locator: item.locator }
 			: object(item.source);
-	return `依据《${text(source.title)}》${text(source.locator)}，${text(item.title ?? `${item.code}：${item.meaning}`)}。${item.context_complete === false ? "该条目未完整取得。" : ""}`;
+	const citation = `依据《${text(source.title)}》${text(source.locator)}，${text(item.title ?? `${item.code}：${item.meaning}`)}。${item.context_complete === false ? "该条目未完整取得。" : ""}`;
+	if (
+		record.tool !== "search_fault_knowledge" ||
+		!["motor_manual", "fault_simulation_plan"].includes(String(item.kind))
+	)
+		return citation;
+	if (typeof item.text !== "string" || !item.text.trim())
+		throw new ToolInputError("资料正文未取得，不能仅用章节标题交付内容。");
+	const excerpt = item.text.trim();
+	return `${citation}\n\n资料摘录${excerpt.length > 2000 ? "（仅显示前2000字符，内容有截断）" : ""}：\n\n${excerpt
+		.slice(0, 2000)
+		.split(/\r?\n/)
+		.map((line) => `> ${text(line)}`)
+		.join(
+			"\n",
+		)}\n\n${item.kind === "fault_simulation_plan" ? "以上为故障模拟试验方案，不代表当前设备已发生该故障；实施前须由现场人员确认条件与安全规程。" : "以上为资料要求，现场适用性仍需核对设备型号与实际条件。"}`;
 }
 function selectedMetrics(data: Data, claim: Claim): Data[] {
 	const metrics = list(data.metrics).filter((metric) => !claim.metric || metric.metric === claim.metric);
@@ -389,7 +404,14 @@ export function renderAnalysis(value: unknown, records: EvidenceRecord[]): strin
 				const columns = [...new Set(rows.flatMap((row) => Object.keys(row)))];
 				body = `本次返回${rows.length}条原始记录，下面展示其中${Math.min(rows.length, 50)}条；预览不是完整时段统计。\n\n`;
 				if (rows.length && columns.length)
-					body += `| ${columns.map((key) => fieldLabels[key as keyof typeof fieldLabels] ?? text(key)).join(" | ")} |\n| ${columns.map(() => "---").join(" | ")} |\n${rows
+					body += `| ${columns
+						.map((key) => {
+							const name = fieldLabels[key as keyof typeof fieldLabels] ?? text(key);
+							if (!numericFields.includes(key as NumericField)) return name;
+							const unit = data.units ? object(data.units)[key] : null;
+							return `${name}（${unit ? text(unit) : "单位未取得"}）`;
+						})
+						.join(" | ")} |\n| ${columns.map(() => "---").join(" | ")} |\n${rows
 						.slice(0, 50)
 						.map((row) => `| ${columns.map((key) => text(row[key] ?? "—")).join(" | ")} |`)
 						.join("\n")}`;

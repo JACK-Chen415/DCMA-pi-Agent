@@ -1,8 +1,21 @@
 import assert from "node:assert/strict";
 import { readFile, unlink, writeFile } from "node:fs/promises";
+import { isAbsolute } from "node:path";
 import { test } from "node:test";
 import { getFaultKnowledgeHealth, getFaultKnowledgeIndex, searchFaultKnowledge } from "../knowledge-index.ts";
 import { buildFaultKnowledgeVectorIndex, getVectorIndexPath } from "../knowledge-vectors.ts";
+
+test("private vector index path is resolved after environment configuration", () => {
+	const previous = process.env.EMBEDDING_INDEX_PATH;
+	try {
+		process.env.EMBEDDING_INDEX_PATH = "../../.dcma-runtime/knowledge/vectors.json";
+		assert.ok(isAbsolute(getVectorIndexPath()));
+		assert.ok(getVectorIndexPath().endsWith("/web/.dcma-runtime/knowledge/vectors.json"));
+	} finally {
+		if (previous === undefined) delete process.env.EMBEDDING_INDEX_PATH;
+		else process.env.EMBEDDING_INDEX_PATH = previous;
+	}
+});
 
 test("knowledge search uses cloud vectors while retaining exact fault-code matches", async () => {
 	const vectorPath = getVectorIndexPath();

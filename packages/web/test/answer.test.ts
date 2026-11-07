@@ -28,6 +28,32 @@ function fixture() {
 	return { store, window, record, plan };
 }
 
+test("motor manual and simulation-plan delivery includes retrieved content, not only headings", () => {
+	for (const kind of ["motor_manual", "fault_simulation_plan"]) {
+		const store = createEvidenceStore();
+		const record = store.add(
+			"search_fault_knowledge",
+			{},
+			{
+				results: [
+					{
+						id: "fixture",
+						kind,
+						source_file: "合成资料.docx",
+						locator: "段落 1-2",
+						title: "维护章节",
+						text: "定期检查轴承。\n[不可信链接](https://untrusted.invalid)",
+					},
+				],
+			},
+		);
+		const output = renderAnalysis({ format: "brief", claims: [{ kind: "manual", evidenceId: record.id }] }, [record]);
+		assert.match(output, /定期检查轴承/);
+		assert.match(output, /资料摘录/);
+		assert.match(output, /\\\[不可信链接\\\]/);
+	}
+});
+
 test("renderer preserves exact counts and configured units without inventing rankings or continuity", () => {
 	const { record, plan } = fixture();
 	const output = renderAnalysis(plan, [record]);
@@ -322,4 +348,23 @@ test("recent readings keep their configured units and available downloads remain
 	assert.doesNotMatch(output, /单位未取得|单位已配置|用户配置/);
 	assert.match(output, /Markdown数据附件/);
 	assert.match(output, /后台监测操作尚未启用/);
+});
+
+test("raw database tables display measurement units without labeling code columns or changing values", () => {
+	const store = createEvidenceStore();
+	const record = store.add(
+		"read_industrial_rows",
+		{},
+		{
+			table: { name: "real_data" },
+			units: { motor_temp: "°C", speed_actual: "r/min", actual_power: "kW" },
+			rows: [{ motor_temp: 38, speed_actual: 1500, actual_power: 1.5, fault_code: "0" }],
+		},
+	);
+	const output = renderAnalysis({ format: "brief", claims: [{ kind: "reading", evidenceId: record.id }] }, [record]);
+	assert.match(output, /电机温度（°C）/);
+	assert.match(output, /实际转速（r\/min）/);
+	assert.match(output, /实际功率（kW）/);
+	assert.match(output, /\| 38 \| 1500 \| 1\.5 \| 0 \|/);
+	assert.doesNotMatch(output, /故障码（/);
 });

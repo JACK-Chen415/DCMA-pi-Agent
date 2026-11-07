@@ -2,7 +2,11 @@
 
 本目录提供配置格式示例，服务不会读取 `.example.json` 文件。示例中的厂商、型号、版本和来源都是占位符，不能直接作为设备资料或故障知识启用。
 
-`createKnowledgeService(directory)` 只读取指定私有运行目录中的 `profiles.json` 和 `knowledge.json`。核实后的资料应放在该目录，不要放入示例目录或版本库。缺少文件时，工具返回 `configured: false`；厂商、单位、代码含义和维修步骤也保持未配置。
+`createKnowledgeService(directory)` 只读取指定私有运行目录中的 `profiles.json` 和 `knowledge.json`。核实后的资料应放在该目录，不要放入示例目录或版本库。缺少文件时，工具返回 `configured: false`；厂商、代码含义和维修步骤保持未配置。没有对应设备配置时，测点使用项目共享采集约定单位，不再依赖本机私有文件。
+
+共享单位定义位于 `dashboard/database/measurement-units.ts`，供展板、聊天侧栏和 Agent 工具共用：温度 °C、电压 V、电流 A、转矩 N·m、功率 kW、脉冲频率 kHz、转速 r/min、负荷率 %。这些是现有采集数值的工业单位，不进行数值换算；r/min 与原 rpm 等价。适用于项目白名单中的五个来源；不据此推断厂家、型号、额定值或运行状态。
+
+返回的 `unitBasis: project_contract`、`unitStatus: project_defined` 表示使用项目单位约定；显式设备配置优先，标为 `device_profile` / `user_configured`。如果显式设备配置中某字段没有填写单位，该字段仍保持未知，不用默认值覆盖特殊设备配置。原始记录、最新读数、统计、图表和报告均携带对应单位；缺单位的数值表头明确写“单位未取得”。
 
 ## 读取与校验
 

@@ -152,24 +152,28 @@ export function createIndustrialTools(
 	const applyUnits = async (result: unknown): Promise<void> => {
 		if (!result || typeof result !== "object") return;
 		const data = result as Record<string, unknown>;
-		if (data.latest && dashboardTables.includes(data.table as DashboardTable)) {
-			const profile = await profileFor(data.table as DashboardTable);
+		const table =
+			typeof data.table === "object" && data.table !== null && "name" in data.table ? data.table.name : data.table;
+		if (("latest" in data || Array.isArray(data.rows)) && dashboardTables.includes(table as DashboardTable)) {
+			const profile = await profileFor(table as DashboardTable);
 			data.units = Object.fromEntries(
 				profile.measurements.map((measurement) => [measurement.field, measurement.unit]),
 			);
+			data.unitSource = profile.unitSource;
+			data.unitBasis = profile.unitBasis;
 		}
 		if (Array.isArray(data.metrics) && dashboardTables.includes(data.table as DashboardTable)) {
 			const profile = await profileFor(data.table as DashboardTable);
-			const units = new Map(profile.measurements.map((measurement) => [measurement.field, measurement.unit]));
+			const units = new Map(profile.measurements.map((measurement) => [measurement.field, measurement]));
 			const metrics = data.metrics.map((metric: { metric: NumericField }) => ({
 				...metric,
-				unit: units.get(metric.metric) ?? null,
-				unitStatus: units.get(metric.metric) ? "user_configured" : "unknown",
+				unit: units.get(metric.metric)?.unit ?? null,
+				unitStatus: units.get(metric.metric)?.unitStatus ?? "unknown",
 			}));
 			data.metrics = metrics;
 			data.unitsVerified = metrics.length > 0 && metrics.every((metric) => metric.unit !== null);
-			data.unitSource = profile.source;
-			data.unitBasis = "device_profile";
+			data.unitSource = profile.unitSource;
+			data.unitBasis = profile.unitBasis;
 		}
 		for (const key of ["a", "b", "statistics"]) await applyUnits(data[key]);
 	};

@@ -9,6 +9,7 @@ import {
 	type NumericField,
 	numericFields,
 } from "../../../dashboard/database/dashboard-types.ts";
+import { measurementUnits } from "../../../dashboard/database/measurement-units.ts";
 import { type StateRuleSet, ToolInputError } from "./contracts.ts";
 
 const MAX_BYTES = 1024 * 1024;
@@ -273,6 +274,7 @@ export function createKnowledgeService(directory: string) {
 			if (!dashboardTables.includes(table)) return invalid();
 			const data = await readConfig(directory, "profiles.json", profiles);
 			const profile = data?.find((item) => item.table === table);
+			const units = profile ? profile.units : measurementUnits;
 			return {
 				table,
 				configured: profile !== undefined,
@@ -286,6 +288,8 @@ export function createKnowledgeService(directory: string) {
 				ratedValues: profile?.ratedValues ?? null,
 				kind: table === "real_data" ? "acquired" : "simulation",
 				source: profile?.source ?? null,
+				unitSource: profile?.source ?? "DCMA项目采集与展板测点单位约定",
+				unitBasis: profile ? "device_profile" : "project_contract",
 				sourceStatus: profile ? ("user_provided" as const) : ("unknown" as const),
 				verified: false as const,
 				fieldLabels,
@@ -301,8 +305,12 @@ export function createKnowledgeService(directory: string) {
 				measurements: numericFields.map((field) => ({
 					field,
 					label: fieldLabels[field],
-					unit: profile?.units[field] ?? null,
-					unitStatus: profile?.units[field] ? ("user_configured" as const) : ("unknown" as const),
+					unit: units[field] ?? null,
+					unitStatus: units[field]
+						? profile
+							? ("user_configured" as const)
+							: ("project_defined" as const)
+						: ("unknown" as const),
 				})),
 			};
 		},
