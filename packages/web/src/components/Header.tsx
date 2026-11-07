@@ -39,7 +39,7 @@ export function Header({
 					<Plus size={17} />
 					<span>新对话</span>
 				</button>
-				<img src="/assets/logo.png" alt="MSPIC-AI 标识" />
+				<img src="/assets/sztu.jpg" alt="深圳技术大学校徽" />
 				<div className="brand-copy">
 					<strong>MSPIC-AI</strong>
 					<p>DCMA 工业运行诊断系统 · 基于 Agent 的智能分析</p>
