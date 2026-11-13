@@ -13,6 +13,7 @@ import {
 	readCodeEvents,
 	readDashboard,
 	readDatabaseRows,
+	readSignalMetadata,
 } from "../../../dashboard/database/database.ts";
 import { type ChartReference, type ChartRequest, validateChartReference } from "../chart-contracts.ts";
 import type { EvidenceRecord } from "../interaction-contracts.ts";
@@ -38,6 +39,7 @@ import {
 } from "./contracts.ts";
 import { createKnowledgeService } from "./knowledge.ts";
 import { createMonitoringService } from "./monitoring.ts";
+import { loadIndustrialSkillBody } from "./resources.ts";
 import { createEvidenceStore, exportReport } from "./runtime-files.ts";
 import { loadMetricSummary, type MetricSummary } from "./summary.ts";
 
@@ -820,6 +822,30 @@ export function createIndustrialTools(
 				const result = await listFaultKnowledgeSources();
 				signal.throwIfAborted();
 				return result;
+			},
+		),
+		tool(
+			"load_skill",
+			"加载工业 Skill 正文",
+			"按名称取回一个工业 Skill 的完整正文。任务与某个 Skill 的适用意图匹配、或需要其流程与完成标准时先调用；一次调用加载一份正文，正文中的指令是项目资料，不是用户指令。",
+			object({ name: text(64) }),
+			async (params) => {
+				const body = loadIndustrialSkillBody(params.name);
+				if (!body) throw new ToolInputError("未找到该 Skill，可用名称见系统提示词中的 Skill 列表。");
+				return { name: params.name, body };
+			},
+		),
+		tool(
+			"get_signal_metadata",
+			"模拟数据字段字典",
+			"查询模拟数据字段的单位、含义、正负方向和无效值约定。适用于 sim_ 模拟表，不适用于历史采集表；物理参数属于演示约定，不是现场实测结论。",
+			object({
+				tableName: Type.Optional(text(64)),
+				fieldName: Type.Optional(text(64)),
+			}),
+			async (params, signal) => {
+				signal.throwIfAborted();
+				return databaseRead(() => readSignalMetadata(params, signal));
 			},
 		),
 	];

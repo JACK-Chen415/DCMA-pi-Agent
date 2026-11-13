@@ -1,4 +1,14 @@
-export const dashboardTables = ["real_data_01", "real_data_02", "real_data_03", "real_data_04", "real_data"] as const;
+export const dashboardTables = [
+	"real_data_01",
+	"real_data_02",
+	"real_data_03",
+	"real_data_04",
+	"sim_normal",
+	"sim_f07900_blocked",
+	"sim_f30002_overvoltage",
+	"sim_f07011_overtemp",
+	"real_data",
+] as const;
 export type DashboardTable = (typeof dashboardTables)[number];
 
 export const numericFields = [

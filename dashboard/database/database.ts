@@ -5,7 +5,14 @@ import type { DatabaseCatalog, DatabaseRows, DatabaseTable } from "./types.ts";
 import { collectionTimeSql, makeDashboardData, normalizeRecord, parseCollectionTime } from "./dashboard-data.ts";
 import { dashboardTables, fieldLabels, numericFields, type NumericField, type DashboardData, type DashboardHistory, type DashboardRange, type DashboardRecord, type DashboardSource, type DashboardTable } from "./dashboard-types.ts";
 
-const sources = ["real_data", "real_data_01", "real_data_02", "real_data_03", "real_data_04"];
+const sources = [...dashboardTables];
+// deviceIndex numbering: real_data_01..04 map from their suffix; scene tables get stable indexes after them.
+const simTableIndexes = new Map([
+	["sim_normal", 5],
+	["sim_f07900_blocked", 6],
+	["sim_f30002_overvoltage", 7],
+	["sim_f07011_overtemp", 8],
+]);
 let pool: Pool | undefined;
 let catalogPromise: Promise<DatabaseTable[]> | undefined;
 let catalogExpiry = 0;
@@ -189,7 +196,7 @@ export async function readDatabaseRows(options: DatabaseReadOptions, signal?: Ab
 	const table = (await waitForCatalog(false, signal)).find(
 		(item) => item.schema === options.schema && item.name === options.table,
 	);
-	if (!table) throw new Error("只能读取目录中列出的 real_data 与 real_data_01 至 real_data_04 数据源。");
+	if (!table) throw new Error("只能读取目录中列出的 real_data、real_data_01 至 real_data_04 及 sim_ 模拟数据源。");
 	const limit = options.limit ?? 20;
 	if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new Error("每次读取 1 至 200 行。");
 	const filters = options.filters ?? [];
@@ -256,7 +263,73 @@ export async function readDatabaseRows(options: DatabaseReadOptions, signal?: Ab
 			orderBy,
 			note: `${orderBy ? `按 ${orderBy} ${direction}返回` : "未找到时间或主键字段，行顺序不确定"}；偏移${offset}。结果最多200行/64KB，长文本或二进制会截断。并发写入时偏移分页不保证跨请求快照一致。仅代表本次返回的有界数据窗口，不是全库统计。MySQL 日期字符串未附带时区，字段单位与设备关联需根据数据库说明确认。`,
 		};
-	}, signal);
+}, signal);
+}
+
+/** Field dictionary for the simulation data; only the documented profile version is readable. */
+export interface SignalMetadata {
+	tableName: string;
+	fieldName: string;
+	fieldLabel: string | null;
+	unit: string | null;
+	description: string | null;
+	direction: string | null;
+	invalidValues: string | null;
+	profileVersion: string;
+}
+
+export async function readSignalMetadata(options: {
+	tableName?: string;
+	fieldName?: string;
+	profileVersion?: string;
+}, signal?: AbortSignal): Promise<{ connected: boolean; definitions: SignalMetadata[]; note: string }> {
+	const tableName = options.tableName?.trim();
+	const fieldName = options.fieldName?.trim();
+	const profileVersion = options.profileVersion?.trim() || "g120_sim_v1";
+	if ((tableName && (tableName.length > 64 || /[^\w]/.test(tableName))) || (fieldName && (fieldName.length > 64 || /[^\w]/.test(fieldName))))
+		throw new Error("tableName 与 fieldName 只能包含字母、数字和下划线。");
+	const conditions = ["TABLE_NAME = 'signal_metadata'"];
+	const values: string[] = [];
+	if (tableName) { conditions.push("table_name = ?"); values.push(tableName); }
+	if (fieldName) { conditions.push("field_name = ?"); values.push(fieldName); }
+	conditions.push("profile_version = ?");
+	values.push(profileVersion);
+	try {
+		const definitions = await readOnly(async (connection) => {
+			const schema = escapeId(process.env.MYSQL_DATABASE?.trim() || "dcma");
+			const [rows] = await connection.execute<RowDataPacket[]>(
+				{
+					sql: `SELECT table_name, field_name, field_label, unit, description, direction, invalid_values, profile_version
+				FROM ${schema}.signal_metadata
+				WHERE ${conditions.join(" AND ")}
+				ORDER BY table_name, field_name`,
+					timeout: 5000,
+				},
+				values,
+			);
+			return rows.map((row) => ({
+				tableName: String(row.table_name),
+				fieldName: String(row.field_name),
+				fieldLabel: row.field_label === null || row.field_label === undefined ? null : String(row.field_label),
+				unit: row.unit === null || row.unit === undefined ? null : String(row.unit),
+				description: row.description === null || row.description === undefined ? null : String(row.description),
+				direction: row.direction === null || row.direction === undefined ? null : String(row.direction),
+				invalidValues:
+					row.invalid_values === null || row.invalid_values === undefined ? null : String(row.invalid_values),
+				profileVersion: String(row.profile_version),
+			}));
+		}, signal);
+		return {
+			connected: true,
+			definitions,
+			note: `字段字典版本${profileVersion}仅适用于模拟数据表；相关物理参数属于演示约定。返回${definitions.length}条定义。`,
+		};
+	} catch (error) {
+		const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+		if (code === "ER_NO_SUCH_TABLE" || (error instanceof Error && error.message.includes("doesn't exist")))
+			return { connected: true, definitions: [], note: `数据库中尚无 signal_metadata 表或版本${profileVersion}的定义。` };
+		throw error;
+	}
 }
 
 export async function closeDatabase(): Promise<void> {
@@ -403,8 +476,9 @@ export async function readDashboard(table: DashboardTable, limit: 50 | 100 | 200
 		for (const name of dashboardTables) {
 			signal?.throwIfAborted();
 			const metadata = catalog.find((item) => item.name === name);
+			const simIndex = simTableIndexes.get(name);
 			const source: DashboardSource = {
-				table: name, deviceIndex: name === "real_data" ? 1 : Number(name.slice(-2)),
+				table: name, deviceIndex: name === "real_data" ? 1 : (simIndex ?? Number(name.slice(-2))),
 				kind: name === "real_data" ? "acquired" : "simulation", available: !!metadata, latest: null, message: "",
 			};
 			summaries.push(source);

@@ -11,8 +11,8 @@ test("registered catalog schema supports optional table filtering without accept
 	const services = createIndustrialServices(directory);
 	try {
 		const tools = createIndustrialTools("real_data_01", services);
-		assert.equal(tools.length, 20);
-		assert.equal(new Set(tools.map((tool) => tool.name)).size, 20);
+		assert.equal(tools.length, 22);
+		assert.equal(new Set(tools.map((tool) => tool.name)).size, 22);
 		const drawing = tools.find((tool) => tool.name === "create_analysis_chart");
 		assert.ok(drawing);
 		assert.ok(

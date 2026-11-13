@@ -1,7 +1,7 @@
 // Core session management
 
+export type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 export { type Args, parseArgs } from "./cli/args.ts";
-
 // Config paths
 export {
 	CONFIG_DIR_NAME,

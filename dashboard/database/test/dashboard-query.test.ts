@@ -72,7 +72,7 @@ test("只读查询对缺失表、标识混合、空表与全无效时间明确�
 		await listDatabaseTables(true);
 		const data = await readDashboard("real_data_01", 100);
 		const selected = data.sources.find((source) => source.table === "real_data_01")!;
-		assert.equal(data.sources.length, 5);
+		assert.equal(data.sources.length, dashboardTables.length);
 		assert.equal(data.latest, selected.latest);
 		if (mode === "normal") { assert.equal(data.latest?.values.speed_actual, 0); assert.equal(data.samples.length, 1); }
 		if (mode === "missing") { assert.equal(selected.available, false); assert.equal(data.latest, null); assert.match(selected.message, /数据表不存在/); }

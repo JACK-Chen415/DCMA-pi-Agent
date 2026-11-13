@@ -354,8 +354,8 @@ export function App() {
 				table,
 				history: (conversation?.messages ?? [])
 					.filter((message) => message.status === "done")
-					.slice(-20)
-					.map(({ role, content }) => ({ role, content: content.slice(0, 8000) })),
+					.slice(-8)
+					.map(({ role, content }) => ({ role, content: content.slice(0, 3000) })),
 			});
 		} catch (error) {
 			setNotice(error instanceof Error ? error.message : "消息发送失败，请重试。");

@@ -3,7 +3,13 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { extname, resolve, sep } from "node:path";
 import { loadEnvFile } from "node:process";
 import { fileURLToPath } from "node:url";
-import { createAgentSession, ModelRuntime, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+import {
+	createAgentSession,
+	ModelRuntime,
+	SessionManager,
+	SettingsManager,
+	type ThinkingLevel,
+} from "@earendil-works/pi-coding-agent";
 import { createServer as createViteServer, type ViteDevServer } from "vite";
 import { type DashboardTable, dashboardTables } from "../../dashboard/database/dashboard-types.ts";
 import { createDatabaseServer } from "../../dashboard/database/server.ts";
@@ -53,6 +59,14 @@ const getRuntime = () => {
 };
 const activeSessions = new Set<Awaited<ReturnType<typeof createAgentSession>>["session"]>();
 let activeChatRequests = 0;
+
+// Reasoning effort per request; reasoning output is billed at full output price, so default low.
+const allowedThinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+const thinkingLevel: ThinkingLevel = allowedThinkingLevels.includes(
+	(process.env.DCMA_THINKING_LEVEL ?? "low") as (typeof allowedThinkingLevels)[number],
+)
+	? ((process.env.DCMA_THINKING_LEVEL ?? "low") as ThinkingLevel)
+	: "low";
 
 function json(response: ServerResponse, status: number, value: unknown): void {
 	response.writeHead(status, {
@@ -263,6 +277,7 @@ async function api(request: IncomingMessage, response: ServerResponse, path: URL
 			cwd: root,
 			modelRuntime: runtime,
 			model,
+			thinkingLevel,
 			resourceLoader,
 			tools: industrialTools.map((tool) => tool.name),
 			customTools: industrialTools,
@@ -331,7 +346,7 @@ async function api(request: IncomingMessage, response: ServerResponse, path: URL
 		try {
 			if (run.signal.aborted) return;
 			await session.prompt(
-				`数据模式：${body.database ? "优先查询 MySQL；需要实际数据时必须调用工具，失败不能用示例替代。仅澄清需求时无需读取数据。" : "优先分析侧栏示例或导入文件；用户明确询问数据库时仍可调用数据库工具，不能混淆数据来源。"}\n当前背景：\n${body.context}\n\n此前对话（JSON）：\n${JSON.stringify(body.history)}\n\n当前用户问题：\n${body.text}`,
+				`当前时刻（UTC）：${new Date().toISOString()}；北京时间为UTC+08:00。\n数据模式：${body.database ? "优先查询 MySQL；需要实际数据时必须调用工具，失败不能用示例替代。仅澄清需求时无需读取数据。" : "优先分析侧栏示例或导入文件；用户明确询问数据库时仍可调用数据库工具，不能混淆数据来源。"}\n当前背景：\n${body.context}\n\n此前对话（JSON）：\n${JSON.stringify(body.history)}\n\n当前用户问题：\n${body.text}`,
 			);
 			if (run.signal.aborted) return;
 			const answer = delivery.finish(draft);
