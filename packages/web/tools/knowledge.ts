@@ -1,6 +1,6 @@
 import { constants } from "node:fs";
 import { type FileHandle, open } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
 	type DashboardField,
 	type DashboardTable,
@@ -267,12 +267,16 @@ async function readConfig<T>(
 	}
 }
 
+export function readDeviceProfiles(path: string) {
+	return readConfig(dirname(path), basename(path), profiles);
+}
+
 /** Reads only profiles.json and knowledge.json in the caller's private runtime directory. */
 export function createKnowledgeService(directory: string) {
 	return {
 		async getDeviceProfile(table: DashboardTable) {
 			if (!dashboardTables.includes(table)) return invalid();
-			const data = await readConfig(directory, "profiles.json", profiles);
+			const data = await readDeviceProfiles(join(directory, "profiles.json"));
 			const profile = data?.find((item) => item.table === table);
 			const units = profile ? profile.units : measurementUnits;
 			return {

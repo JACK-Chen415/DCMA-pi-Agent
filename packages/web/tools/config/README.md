@@ -4,7 +4,7 @@
 
 `createKnowledgeService(directory)` 只读取指定私有运行目录中的 `profiles.json` 和 `knowledge.json`。核实后的资料应放在该目录，不要放入示例目录或版本库。缺少文件时，工具返回 `configured: false`；厂商、代码含义和维修步骤保持未配置。没有对应设备配置时，测点使用项目共享采集约定单位，不再依赖本机私有文件。
 
-共享单位定义位于 `dashboard/database/measurement-units.ts`，供展板、聊天侧栏和 Agent 工具共用：温度 °C、电压 V、电流 A、转矩 N·m、功率 kW、脉冲频率 kHz、转速 r/min、负荷率 %。这些是现有采集数值的工业单位，不进行数值换算；r/min 与原 rpm 等价。适用于项目白名单中的五个来源；不据此推断厂家、型号、额定值或运行状态。
+共享单位定义位于 `dashboard/database/measurement-units.ts`，供展板、聊天侧栏和 Agent 工具共用：温度 °C、电压 V、电流 A、转矩 N·m、功率 kW、脉冲频率 kHz、转速 r/min、负荷率 %。这些是现有采集数值的工业单位，不进行数值换算；r/min 与原 rpm 等价。适用于项目白名单内的来源；不据此推断厂家、型号、额定值或运行状态。
 
 返回的 `unitBasis: project_contract`、`unitStatus: project_defined` 表示使用项目单位约定；显式设备配置优先，标为 `device_profile` / `user_configured`。如果显式设备配置中某字段没有填写单位，该字段仍保持未知，不用默认值覆盖特殊设备配置。原始记录、最新读数、统计、图表和报告均携带对应单位；缺单位的数值表头明确写“单位未取得”。
 
@@ -16,11 +16,11 @@
 
 ## profiles.json
 
-顶层只允许一个 `profiles` 数组，最多 5 条。每条配置的字段如下，其中可选字段已单独标出：
+顶层只允许一个 `profiles` 数组，最多 9 条。每条配置的字段如下，其中可选字段已单独标出：
 
 | 字段 | 类型与限制 |
 | --- | --- |
-| `table` | `real_data_01`、`real_data_02`、`real_data_03`、`real_data_04`、`real_data`，不能重复 |
+| `table` | `real_data_01` 至 `real_data_04`、`sim_normal`、`sim_f07900_blocked`、`sim_f30002_overvoltage`、`sim_f07011_overtemp`、`real_data`，不能重复 |
 | `manufacturer`, `model`, `version` | 非空字符串，每项最多 160 字符；未知时必须为 `null` |
 | `source` | 用户配置依据，非空字符串，最多 500 字符 |
 | `units` | 对象，可为空；键仅允许下列数值字段，值为最多 32 字符的非空字符串 |
@@ -46,7 +46,9 @@
 
 `getDeviceProfile` 还返回独立的 `codeConventions`：按已确认的 DCMA 采样约定，故障码0为“未报告故障”、报警码0为“未报告报警”；非零码需检索手册，缺失或空白为未知。该返回信息不属于配置文件字段，不代表已配置 `stateRules`，也不解释 `status`、控制字或状态字。零码不能证明设备正在运行、在线或健康。
 
-电机1～4确认为模拟设备后，可运行 `node scripts/configure-simulation-profiles.ts` 初始化四个模拟来源及展板已有单位。该初始化不会填写真实电机型号、额定值、报警阈值或状态规则，也不会覆盖已有 `profiles.json`。配置中型号或规则为 `null` 不表示已填写的单位不可用；文档检索仍可独立执行。
+运行 `node scripts/configure-simulation-profiles.ts` 会添加缺少的模拟来源，保留已有条目。新增的四个 `sim_` 场景使用 `g120_sim_v1` 的 `RUNNING`、`STOPPED`、`FAULT` 约定。原有四个 `real_data_01` 至 `real_data_04` 模拟来源仅初始化设备资料和单位。配置中型号或规则为 `null` 不影响已填写的单位与独立的文档检索。
+
+补齐期间应暂停手动保存 `profiles.json`。脚本会在替换前检查设备资料是否已变化。如果进程被强制终止并留下 `profiles.json.lock` 空目录，确认没有脚本正在运行后可删除该空目录，再重新执行。
 
 ## knowledge.json
 

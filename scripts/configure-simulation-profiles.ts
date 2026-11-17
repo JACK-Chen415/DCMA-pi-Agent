@@ -1,8 +1,10 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { link, mkdir, mkdtemp, rename, rm, rmdir, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { dashboardTables, numericFields } from "../dashboard/database/dashboard-types.ts";
-import { fieldUnits } from "../dashboard/frontend/src/dashboard-view.ts";
+import { isDeepStrictEqual } from "node:util";
+import { dashboardTables } from "../dashboard/database/dashboard-types.ts";
+import { measurementUnits } from "../dashboard/database/measurement-units.ts";
+import { readDeviceProfiles } from "../packages/web/tools/knowledge.ts";
 
 const output = process.argv[2]
 	? resolve(process.argv[2])
@@ -43,14 +45,37 @@ const profiles = dashboardTables
 			source: isSim
 				? `G120模拟场景表（g120_sim_v1，每3秒新增一条、保留7天）；场景：${scene?.scene}。测点单位沿用展板 fieldUnits；status字段用RUNNING/STOPPED/FAULT字符串，字段含义以signal_metadata字典为准；物理参数属演示约定，未绑定真实电机型号或现场阈值。`
 				: "用户确认电机1～4为模拟设备；测点单位沿用已确认的展板 fieldUnits；未绑定真实电机型号、额定值或异常阈值。",
-			units: Object.fromEntries(
-				numericFields.filter((field) => fieldUnits[field]).map((field) => [field, fieldUnits[field]]),
-			),
+			units: measurementUnits,
 			...(isSim ? { stateRules: simStateRules } : {}),
 		};
 	});
 
-await mkdir(dirname(output), { recursive: true, mode: 0o700 });
-// Existing local profiles may contain user settings; initialization must not overwrite them.
-await writeFile(output, `${JSON.stringify({ profiles }, null, 2)}\n`, { flag: "wx", mode: 0o600 });
-console.log(`已配置${profiles.length}个模拟来源：${output}`);
+const directory = dirname(output);
+await mkdir(directory, { recursive: true, mode: 0o700 });
+const lock = `${output}.lock`;
+await mkdir(lock, { mode: 0o700 });
+try {
+	const current = await readDeviceProfiles(output);
+	const existing = current ?? [];
+	const missing = profiles.filter(({ table }) => !existing.some((profile) => profile.table === table));
+	if (missing.length) {
+		const staging = await mkdtemp(join(directory, ".profiles-"));
+		try {
+			const next = join(staging, "profiles.json");
+			await writeFile(next, `${JSON.stringify({ profiles: [...existing, ...missing] }, null, 2)}\n`, { mode: 0o600 });
+			await readDeviceProfiles(next);
+			if (current === null) {
+				await link(next, output);
+			} else {
+				if (!isDeepStrictEqual(current, await readDeviceProfiles(output)))
+					throw new Error("设备资料在处理期间发生变化，请重新运行补齐命令。");
+				await rename(next, output);
+			}
+		} finally {
+			await rm(staging, { recursive: true });
+		}
+	}
+	console.log(`已补齐${missing.length}个模拟来源，保留${existing.length}个已有来源：${output}`);
+} finally {
+	await rmdir(lock);
+}

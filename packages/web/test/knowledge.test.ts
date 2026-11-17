@@ -57,7 +57,7 @@ test("missing private profiles retain project measurement units for all five sou
 	}
 });
 
-test("simulation setup configures units for four sources without inventing real identities or overwriting profiles", async () => {
+test("simulation setup configures units and adds state rules only for new scenario sources", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "dcma-simulation-"));
 	try {
 		const output = join(directory, "profiles.json");
@@ -81,10 +81,57 @@ test("simulation setup configures units for four sources without inventing real 
 			assert.equal(profile.codeConventions.alarm_code.zero, "未报告报警");
 			assert.match(profile.codeConventions.otherCodes, /不能套用/);
 		}
+		for (const table of [
+			"sim_normal",
+			"sim_f07900_blocked",
+			"sim_f30002_overvoltage",
+			"sim_f07011_overtemp",
+		] as const) {
+			const profile = await service.getDeviceProfile(table);
+			assert.equal(profile.configured, true);
+			assert.equal(profile.model, null);
+			assert.equal(profile.stateRules?.version, "g120_sim_v1");
+			assert.deepEqual(
+				profile.stateRules.rules.map((rule) => rule.all[0].value),
+				["RUNNING", "STOPPED", "FAULT"],
+			);
+		}
 		assert.equal((await service.getDeviceProfile("real_data")).configured, false);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("simulation setup fills missing profiles, preserves edits and rejects malformed configuration", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "dcma-profile-merge-"));
+	try {
+		const output = join(directory, "profiles.json");
+		const script = fileURLToPath(new URL("../../../scripts/configure-simulation-profiles.ts", import.meta.url));
+		const profiles = [
+			{ table: "real_data", manufacturer: null, model: null, version: null, source: "历史采集", units: {} },
+			{
+				table: "sim_normal",
+				manufacturer: null,
+				model: null,
+				version: null,
+				source: "手工设置",
+				units: { motor_temp: "°C" },
+			},
+		];
+		await writeFile(output, JSON.stringify({ profiles }));
+		execFileSync(process.execPath, [script, output], { stdio: "pipe" });
 		const before = await readFile(output, "utf8");
-		assert.throws(() => execFileSync(process.execPath, [script, output], { stdio: "pipe" }));
+		assert.equal(JSON.parse(before).profiles.length, 9);
+		assert.deepEqual(JSON.parse(before).profiles.slice(0, profiles.length), profiles);
+		execFileSync(process.execPath, [script, output], { stdio: "pipe" });
 		assert.equal(await readFile(output, "utf8"), before);
+		const invalid = '{"profiles":[{}]}';
+		await writeFile(output, invalid);
+		assert.throws(
+			() => execFileSync(process.execPath, [script, output], { stdio: "pipe" }),
+			/本地知识配置或查询无效/,
+		);
+		assert.equal(await readFile(output, "utf8"), invalid);
 	} finally {
 		await rm(directory, { recursive: true, force: true });
 	}

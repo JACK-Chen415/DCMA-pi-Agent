@@ -272,9 +272,11 @@ export interface SignalMetadata {
 	fieldName: string;
 	fieldLabel: string | null;
 	unit: string | null;
+	storedUnit: string | null;
 	description: string | null;
 	direction: string | null;
-	invalidValues: string | null;
+	valueConventions: Record<string, unknown> | null;
+	invalidValues: unknown[] | null;
 	profileVersion: string;
 }
 
@@ -288,36 +290,44 @@ export async function readSignalMetadata(options: {
 	const profileVersion = options.profileVersion?.trim() || "g120_sim_v1";
 	if ((tableName && (tableName.length > 64 || /[^\w]/.test(tableName))) || (fieldName && (fieldName.length > 64 || /[^\w]/.test(fieldName))))
 		throw new Error("tableName 与 fieldName 只能包含字母、数字和下划线。");
-	const conditions = ["TABLE_NAME = 'signal_metadata'"];
-	const values: string[] = [];
+	const schemaName = process.env.MYSQL_DATABASE?.trim() || "dcma";
+	const conditions = ["schema_name = ?"];
+	const values = [schemaName];
 	if (tableName) { conditions.push("table_name = ?"); values.push(tableName); }
 	if (fieldName) { conditions.push("field_name = ?"); values.push(fieldName); }
 	conditions.push("profile_version = ?");
 	values.push(profileVersion);
 	try {
 		const definitions = await readOnly(async (connection) => {
-			const schema = escapeId(process.env.MYSQL_DATABASE?.trim() || "dcma");
 			const [rows] = await connection.execute<RowDataPacket[]>(
 				{
-					sql: `SELECT table_name, field_name, field_label, unit, description, direction, invalid_values, profile_version
-				FROM ${schema}.signal_metadata
+					sql: `SELECT table_name, field_name, description, stored_unit, display_unit, value_conventions, invalid_values, profile_version
+				FROM ${escapeId(schemaName)}.signal_metadata
 				WHERE ${conditions.join(" AND ")}
 				ORDER BY table_name, field_name`,
 					timeout: 5000,
 				},
 				values,
 			);
-			return rows.map((row) => ({
-				tableName: String(row.table_name),
-				fieldName: String(row.field_name),
-				fieldLabel: row.field_label === null || row.field_label === undefined ? null : String(row.field_label),
-				unit: row.unit === null || row.unit === undefined ? null : String(row.unit),
-				description: row.description === null || row.description === undefined ? null : String(row.description),
-				direction: row.direction === null || row.direction === undefined ? null : String(row.direction),
-				invalidValues:
-					row.invalid_values === null || row.invalid_values === undefined ? null : String(row.invalid_values),
-				profileVersion: String(row.profile_version),
-			}));
+			return rows.map((row): SignalMetadata => {
+				const fieldName = String(row.field_name);
+				const conventions: unknown = row.value_conventions;
+				const valueConventions = conventions && typeof conventions === "object" && !Array.isArray(conventions)
+					? conventions as Record<string, unknown>
+					: null;
+				return {
+					tableName: String(row.table_name),
+					fieldName,
+					fieldLabel: Object.hasOwn(fieldLabels, fieldName) ? fieldLabels[fieldName as keyof typeof fieldLabels] : null,
+					unit: row.display_unit ?? row.stored_unit ?? null,
+					storedUnit: row.stored_unit ?? null,
+					description: row.description ?? null,
+					direction: typeof valueConventions?.sign === "string" ? valueConventions.sign : null,
+					valueConventions,
+					invalidValues: Array.isArray(row.invalid_values) ? row.invalid_values : null,
+					profileVersion: String(row.profile_version),
+				};
+			});
 		}, signal);
 		return {
 			connected: true,
