@@ -54,6 +54,8 @@ export interface FaultKnowledgeRetrievalLog {
 	candidate_count: number;
 	returned_count: number;
 	semantic_threshold: number;
+	/** 查询点名的设备系列与来源归属冲突、被排除或降权的来源；无冲突时缺省。 */
+	family_conflict?: string[];
 	fallback: string | null;
 }
 
@@ -61,6 +63,29 @@ const knowledgePath = resolve(fileURLToPath(new URL("./knowledge/data/knowledge.
 export const maxLimit = 20;
 const minimumSemanticScore = 0.15;
 const faultCodeInQuery = /(?:^|[^A-Za-z0-9])([FANW]\d{4,6})(?!\d)/i;
+// 型号形如 G120、CU250、YFB801-2、90L-4：字母数字混合、含连字符或以字母开头、长度 ≥3。
+const equipmentModelInQuery = /(?:^|[^\p{L}\p{N}])([\p{L}\d][\p{L}\p{N}-]{1,10})(?=[^\p{L}\p{N}]|$)/gu;
+// 查询点名某驱动系列（如 G120）时，语料中归属其它系列（S120/S150）的来源被排除，避免冒充适用手册。
+const incompatibleFamilies: Record<string, readonly string[]> = { g120: ["s120-fault-manual"] };
+const sourceFamilyDesignators: Record<string, readonly string[]> = { "s120-fault-manual": ["s120", "s150"] };
+// 口语说法 → 手册/章节标题用语。检索时把扩展出的词以较低权重并入查询词组。
+const symptomExpansionRules: readonly (readonly [RegExp, readonly string[]])[] = [
+	[/嗡嗡/, ["嗡嗡异响"]],
+	[/送电|上电/, ["通电"]],
+	[/(?:不|没|无法|不能)(?:转|启动|转动)/, ["不启动"]],
+	[/转得[^，。；]*慢|转速不够|转速上不去|速度上不来/, ["转速不足"]],
+	[/没劲|无力|出力不够|带不动|转矩不够/, ["出力不足"]],
+	[/烫|发热|温度高|超温|越来越热/, ["过热"]],
+	[/时有时无|断断续续|卡顿|刷新中断|断连|丢包/, ["通讯", "数据丢包"]],
+	[/下不去|下发不了|修改不了|写不进去/, ["下发"]],
+	[/缺相|断相/, ["缺相"]],
+];
+const expandedTokenWeight = 0.5;
+// 每份 docx 的首段是标题/元数据概览（无章节标题），词法上吸引所有该文档的查询，按导航内容降权。
+const overviewLocatorPattern = /^段落 1-\d/;
+const overviewScoreFactor = 0.35;
+const recordModelAffinityScore = 8;
+const sourceModelAffinityScore = 6;
 let indexPromise: Promise<FaultKnowledgeRecord[]> | undefined;
 
 function normalize(value: string): string {
@@ -68,11 +93,75 @@ function normalize(value: string): string {
 }
 
 function tokens(value: string): string[] {
-	return normalize(value).split(/[^\p{L}\p{N}_-]+/u).filter((token) => token.length >= 2);
+	const parts = normalize(value).split(/[^\p{L}\p{N}_-]+/u).filter(Boolean);
+	const result: string[] = [];
+	for (const part of parts) {
+		// 拉丁/数字片段（含型号）保留整段；CJK 片段切 2-gram，让口语短语能与手册用语部分重叠。
+		if (!/\p{Script=Han}/u.test(part)) {
+			if (part.length >= 2) result.push(part);
+			continue;
+		}
+		if (part.length === 1) continue;
+		for (let index = 0; index < part.length - 1; index++) result.push(part.slice(index, index + 2));
+	}
+	return result;
+}
+
+interface QueryTerms {
+	direct: string[];
+	expanded: string[];
+	models: string[];
+	conflicts: string[];
 }
 
 function inferFaultCode(query: string): string {
 	return query.match(faultCodeInQuery)?.[1]?.trim() ?? "";
+}
+
+function inferEquipmentModels(query: string): string[] {
+	return [...normalize(query).matchAll(equipmentModelInQuery)]
+		.map((match) => match[1]!.toLowerCase())
+		.filter(
+			(model) =>
+				model.length >= 3 &&
+				/\p{L}/u.test(model) &&
+				/\d/.test(model) &&
+				// 故障码（F30004 等）不是设备型号。
+				! /^[fancw]\d{4,6}$/i.test(model),
+		);
+}
+
+/** 查询点名某驱动系列且未同时点名冲突来源自身的系列时，返回应排除的来源。 */
+function inferFamilyConflicts(models: string[]): string[] {
+	const named = new Set(models.map((model) => model.replace(/-/g, "")));
+	const conflicts = new Set<string>();
+	for (const model of models) {
+		for (const source of incompatibleFamilies[model.replace(/-/g, "")] ?? []) {
+			if (!(sourceFamilyDesignators[source] ?? []).some((designator) => named.has(designator))) conflicts.add(source);
+		}
+	}
+	return [...conflicts];
+}
+
+function queryTerms(query: string): QueryTerms {
+	const normalized = normalize(query);
+	const seen = new Set<string>();
+	const direct = tokens(query).filter((token) => (seen.has(token) ? false : (seen.add(token), true)));
+	const expanded: string[] = [];
+	const expandedSeen = new Set<string>();
+	for (const [pattern, phrases] of symptomExpansionRules) {
+		if (!pattern.test(normalized)) continue;
+		for (const phrase of phrases) {
+			for (const token of tokens(phrase)) {
+				if (!seen.has(token) && !expandedSeen.has(token)) {
+					expandedSeen.add(token);
+					expanded.push(token);
+				}
+			}
+		}
+	}
+	const models = inferEquipmentModels(query);
+	return { direct, expanded, models, conflicts: inferFamilyConflicts(models) };
 }
 
 function isRecord(value: unknown): value is FaultKnowledgeRecord {
@@ -120,13 +209,72 @@ export async function getFaultKnowledgeIndex(): Promise<FaultKnowledgeRecord[]> 
 	return indexPromise;
 }
 
-function score(item: FaultKnowledgeRecord, query: string, requestedCode: string): number {
-	const queryTokens = tokens(query);
-	const haystack = normalize(`${item.title} ${item.text} ${item.codes.join(" ")}`);
+interface LexicalContext {
+	terms: QueryTerms;
+	requestedCode: string;
+	/** token → 出现该 token 的记录数；IDF 加权用，随索引缓存。 */
+	documentFrequency: Map<string, number>;
+	totalRecords: number;
+}
+
+const lexicalStats = new WeakMap<FaultKnowledgeRecord[], Map<string, number>>();
+
+/** 一次性统计每个 token 出现在多少条记录里；常见字组（“电机”“手册”）IDF 低，现象词 IDF 高。 */
+function getLexicalContext(records: FaultKnowledgeRecord[], terms: QueryTerms, requestedCode: string): LexicalContext {
+	let stats = lexicalStats.get(records);
+	if (!stats) {
+		stats = new Map();
+		const seen = new Set<string>();
+		for (const item of records) {
+			seen.clear();
+			for (const token of tokens(`${item.title} ${item.text} ${item.codes.join(" ")}`)) {
+				if (seen.has(token)) continue;
+				seen.add(token);
+				stats.set(token, (stats.get(token) ?? 0) + 1);
+			}
+		}
+		lexicalStats.set(records, stats);
+	}
+	return { terms, requestedCode, documentFrequency: stats, totalRecords: records.length };
+}
+
+/** 查询里的型号在该记录自身文本中出现的次数：≥1 说明这条记录讲的就是这台设备。 */
+function recordModelAffinity(item: FaultKnowledgeRecord, models: string[]): number {
+	if (!models.length) return 0;
+	const haystack = normalize(item.text);
+	return models.reduce((sum, model) => sum + (haystack.includes(model) ? 1 : 0), 0);
+}
+
+/** 查询里的型号在记录所属来源（含标题）中出现的次数：来源级归属信号。 */
+function sourceModelAffinity(item: FaultKnowledgeRecord, models: string[]): number {
+	if (!models.length) return 0;
+	const haystack = normalize(`${item.title} ${item.text}`);
+	return models.reduce((sum, model) => sum + (haystack.includes(model) ? 1 : 0), 0);
+}
+
+function score(item: FaultKnowledgeRecord, query: string, lexical: LexicalContext): number {
+	const { terms, requestedCode, documentFrequency, totalRecords } = lexical;
 	const exactCode = Boolean(requestedCode) && item.codes.some((code) => normalize(code) === normalize(requestedCode));
-	const tokenHits = queryTokens.reduce((sum, token) => sum + (haystack.includes(token) ? 1 : 0), 0);
-	const titleHits = queryTokens.reduce((sum, token) => sum + (normalize(item.title).includes(token) ? 1 : 0), 0);
-	return (exactCode ? 100 : 0) + tokenHits * 4 + titleHits * 3;
+	const haystack = normalize(`${item.title} ${item.text} ${item.codes.join(" ")}`);
+	const title = normalize(item.title);
+	const weighted = (tokenList: string[], weight: number) =>
+		tokenList.reduce((sum, token) => {
+			if (!haystack.includes(token)) return sum;
+			const idf = Math.log(1 + totalRecords / (documentFrequency.get(token) ?? 1));
+			return sum + idf * weight;
+		}, 0);
+	const tokenScore = weighted(terms.direct, 1) + weighted(terms.expanded, expandedTokenWeight);
+	const titleScore = [...terms.direct, ...terms.expanded].reduce(
+		(sum, token) => sum + (title.includes(token) ? 3 : 0),
+		0,
+	);
+	return (
+		(exactCode ? 100 : 0) +
+		tokenScore * 2 +
+		titleScore +
+		recordModelAffinity(item, terms.models) * recordModelAffinityScore +
+		sourceModelAffinity(item, terms.models) * sourceModelAffinityScore
+	);
 }
 
 export async function searchFaultKnowledge(options: SearchOptions = {}) {
@@ -138,6 +286,7 @@ export async function searchFaultKnowledge(options: SearchOptions = {}) {
 	const requestedLimit = options.limit ?? 8;
 	const limit = Number.isFinite(requestedLimit) ? Math.min(maxLimit, Math.max(1, Math.floor(requestedLimit))) : 8;
 	const queryTokens = tokens(query);
+	const terms = queryTerms(query);
 	const records = await getFaultKnowledgeIndex();
 	const kinds = [...new Set(records.map((item) => item.kind))];
 	const sources = [...new Set(records.map((item) => item.source_id))];
@@ -178,8 +327,11 @@ export async function searchFaultKnowledge(options: SearchOptions = {}) {
 		retrievalNotice = "故障码精确查询按设计跳过向量查询";
 	}
 	const vectorById = new Map(vectorIndex?.items.map((item) => [item.id, item.vector]) ?? []);
+	const lexical = getLexicalContext(records, terms, requestedCode);
+	// 查询点名某驱动系列（如 G120）且未同时点名 S120 时，冲突来源整体不进入候选。
 	const candidates = records.filter(
 		(item) =>
+			(!terms.conflicts.length || !terms.conflicts.includes(item.source_id)) &&
 			(!requestedId || item.id === requestedId) &&
 			(!source || item.source_id === source) &&
 			(!kind || item.kind === kind) &&
@@ -190,11 +342,12 @@ export async function searchFaultKnowledge(options: SearchOptions = {}) {
 	});
 	const ranked = candidates
 		.map(({ item, context }) => {
-			const lexicalScore = score(item, query, requestedCode);
+			const lexicalScore = score(item, query, lexical);
 			const vector = queryVector ? vectorById.get(item.id) : undefined;
 			const semanticScore = vector && queryVector ? Math.max(0, cosineSimilarity(vector, queryVector)) : 0;
 			const acceptedSemanticScore = semanticScore >= minimumSemanticScore ? semanticScore : 0;
-			const combinedScore = lexicalScore + acceptedSemanticScore * 30;
+			const overviewFactor = overviewLocatorPattern.test(item.locator) ? overviewScoreFactor : 1;
+			const combinedScore = Math.max(0, (lexicalScore + acceptedSemanticScore * 30) * overviewFactor);
 			return { item, context, lexicalScore, semanticScore: acceptedSemanticScore, combinedScore };
 		})
 		.filter((row) => !queryTokens.length || row.combinedScore > 0)
@@ -210,6 +363,7 @@ export async function searchFaultKnowledge(options: SearchOptions = {}) {
 		candidate_count: candidates.length,
 		returned_count: ranked.length,
 		semantic_threshold: minimumSemanticScore,
+		...(terms.conflicts.length ? { family_conflict: terms.conflicts } : {}),
 		fallback: retrievalNotice ?? null,
 	};
 	const response = {
