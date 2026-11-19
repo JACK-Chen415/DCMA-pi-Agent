@@ -12,7 +12,6 @@ import { DateTimeInput } from "./components/DateTimeInput.tsx";
 import { SystemConfig } from "./components/SystemConfig.tsx";
 import { DevicePicker } from "./components/DevicePicker.tsx";
 
-const motorTables: DashboardTable[] = ["real_data_01", "real_data_02", "real_data_03", "real_data_04"];
 const runningFields: DashboardField[] = ["inverter_load_rate", "motor_load_rate", "fault_code", "alarm_code"];
 const codeFields: DashboardField[] = ["fault_code", "alarm_code", "control_word", "status_word"];
 const fields = (Object.keys(fieldLabels) as DashboardField[]).filter((field) => field !== "status" && field !== "system_run_time");
@@ -56,8 +55,8 @@ export function App() {
 	const [view, setView] = useState<View>(currentView);
 	const [devicePickerOpen, setDevicePickerOpen] = useState(false);
 	const [initialTable] = useState(() => dashboardTables.find((table) => table === new URLSearchParams(window.location.search).get("table")) ?? "real_data_01");
-	const [motor, setMotor] = useState(initialTable === "real_data" ? 1 : Number(initialTable.slice(-2)));
-	const [history, setHistory] = useState(initialTable === "real_data");
+	const [table, setTable] = useState<DashboardTable>(initialTable);
+	const [, setHistory] = useState(initialTable === "real_data");
 	const [limit, setLimit] = useState<50 | 100 | 200>(100);
 	const [metric, setMetric] = useState<"speed" | "torque" | NumericField>("speed");
 	const [from, setFrom] = useState(""), [to, setTo] = useState("");
@@ -71,7 +70,6 @@ export function App() {
 		window.addEventListener("hashchange", navigate);
 		return () => window.removeEventListener("hashchange", navigate);
 	}, []);
-	const table = motor === 1 && history ? "real_data" : motorTables[motor - 1];
 	const browsingHistory = view === "query";
 	const realtime = useDashboard(table, limit, !browsingHistory && view !== "settings");
 	const pickerData = useDashboard(table, 100, devicePickerOpen && (browsingHistory || view === "settings"));
@@ -107,7 +105,7 @@ export function App() {
 				return { id, code: id, name: String(source?.latest?.raw.device_name || "等待设备数据"), sourceLabel: id === "real_data" ? "历史采集" : "模拟数据", image: `${import.meta.env.BASE_URL}assets/gen_photo.png`, assessment: source?.assessment };
 			})} error={deviceError} subtitle="选择设备与数据来源，查看对应的运行数据" onClose={() => setDevicePickerOpen(false)} onSelect={(id) => {
 				if (id === table) return;
-				resetRange(); setHistory(id === "real_data"); setMotor(id === "real_data" ? 1 : Number(id.slice(-2)));
+				resetRange(); setHistory(id === "real_data"); setTable(id as DashboardTable);
 				const url = new URL(window.location.href); url.searchParams.set("table", id); window.history.replaceState(null, "", url);
 			}} />}
 			<aside className="sidebar">
@@ -117,7 +115,7 @@ export function App() {
 				<nav className="sidebar-nav" aria-label="监控页面">{views.map((item) => <a key={item.id} href={`#${item.id}`} aria-current={view === item.id ? "page" : undefined}><NavIcon path={item.icon} /><span>{item.title}</span>{view === item.id && <i aria-hidden="true" />}</a>)}</nav>
 				{view !== "settings" && <div className="device-controls">
 					<p className="sidebar-caption">当前监控设备</p>
-					<strong>{String(latest?.raw.device_name || `G120 电机 ${motor}`)}</strong>
+					<strong>{String(latest?.raw.device_name || `G120 电机 ${table === "real_data" ? 1 : table.replace("real_data_0", "")}`)}</strong>
 					<span className="muted small">{sourceLabel}</span>
 					<button type="button" className="device-switch" onClick={() => setDevicePickerOpen(true)}>切换设备 <span aria-hidden="true">→</span></button>
 				</div>}
@@ -144,11 +142,11 @@ export function App() {
 					{range ? <><p className="muted small">查询范围：{displayTime(range.from)} ～ {displayTime(range.to)}（北京时间，包含起止时刻）</p><div className="event-pagination"><button className="code-reset" disabled={loading || samplePage <= 1} onClick={() => setSamplePage(samplePage - 1)}>上一页</button><span>第 {samplePage} / {Math.max(samplePage, pages)} 页 · 共 {samples.data?.total ?? "—"} 条</span><button className="code-reset" disabled={loading || !samples.data || samplePage >= pages} onClick={() => setSamplePage(samplePage + 1)}>下一页</button></div></> : <p className="muted">选择起止时间后查询历史采样，结果按采集时间从新到旧分页，趋势图展示当前页记录。</p>}
 				</section>}
 				{view !== "settings" && <>
-				<section className="panel-card device-detail" aria-label="当前设备详情"><div className="detail-heading"><div><p className="eyebrow">当前设备{browsingHistory ? " · 历史采样" : ""}</p><h2>{latest ? displayValue(latest.raw.device_name) : `G120 电机 ${motor}`}</h2><p className="muted">变频器：{displayValue(latest?.raw.inverter_name)}</p><p className="source-context">{table === "real_data" ? "历史记录 · 非当前工况" : "模拟采样 · 功能验证"}</p></div><span className="source-badge">{sourceLabel}</span></div>{(!browsingHistory || range) && <div className="time-grid"><div><span>{browsingHistory ? "当前页最新采集（北京时间）" : "最后采集（北京时间）"}</span><strong>{displayTime(latest?.acquiredAt)}</strong><small className="sample-age">查询时距采集：{displaySampleAge(latest?.acquiredAt, data?.queriedAt)}</small></div><div><span>{browsingHistory ? "查询状态" : table === "real_data" ? "历史记录读取状态" : "采集更新状态"}</span><strong>{update}</strong></div><details className="secondary-times"><summary>更多时间信息</summary><div><span>入库时间（北京时间）</span><strong>{displayTime(latest?.ingestedAt)}</strong></div><div><span>上次查询成功</span><strong>{displayTime(data?.queriedAt)}</strong></div></details></div>}</section>
+				<section className="panel-card device-detail" aria-label="当前设备详情"><div className="detail-heading"><div><p className="eyebrow">当前设备{browsingHistory ? " · 历史采样" : ""}</p><h2>{latest ? displayValue(latest.raw.device_name) : `G120 电机 ${table === "real_data" ? 1 : table.replace("real_data_0", "")}`}</h2><p className="muted">变频器：{displayValue(latest?.raw.inverter_name)}</p><p className="source-context">{table === "real_data" ? "历史记录 · 非当前工况" : "模拟采样 · 功能验证"}</p></div><span className="source-badge">{sourceLabel}</span></div>{(!browsingHistory || range) && <div className="time-grid"><div><span>{browsingHistory ? "当前页最新采集（北京时间）" : "最后采集（北京时间）"}</span><strong>{displayTime(latest?.acquiredAt)}</strong><small className="sample-age">查询时距采集：{displaySampleAge(latest?.acquiredAt, data?.queriedAt)}</small></div><div><span>{browsingHistory ? "查询状态" : table === "real_data" ? "历史记录读取状态" : "采集更新状态"}</span><strong>{update}</strong></div><details className="secondary-times"><summary>更多时间信息</summary><div><span>入库时间（北京时间）</span><strong>{displayTime(latest?.ingestedAt)}</strong></div><div><span>上次查询成功</span><strong>{displayTime(data?.queriedAt)}</strong></div></details></div>}</section>
 				<div aria-live="polite">{error && <p className="notice error">{data ? "刷新失败，以下保留上次成功结果。" : "当前选择查询失败。"}{error}</p>}{!loading && data && !latest && <p className="notice">{browsingHistory ? "所选时间段暂无采样记录。" : selectedSource?.message || "当前来源暂无采样记录。"}</p>}{warnings.map((warning) => <p className="notice" key={warning}>{warning}</p>)}</div>
 				</>}
 				{view === "overview" && <>
-					<section className="panel-card overview-intro"><div className="overview-copy"><div><p className="eyebrow">设备与来源</p><h2>G120 电机 {motor}</h2><p className="muted">查看这台电机与变频器的读数、趋势和采样记录。</p></div><a className="text-link" href="#realtime">查看采样趋势 →</a></div><figure className="equipment-figure"><img className="equipment-illustration" src={`${import.meta.env.BASE_URL}assets/illustrations/motor-drive.svg`} alt="电机与变频器连接关系的示意图" width="420" height="200" decoding="async" /><figcaption>电机与变频器 · 驱动链示意</figcaption></figure></section>
+					<section className="panel-card overview-intro"><div className="overview-copy"><div><p className="eyebrow">设备与来源</p><h2>{displayValue(latest?.raw.device_name) || `G120 电机 ${table === "real_data" ? 1 : table.replace("real_data_0", "")}`}</h2><p className="muted">查看这台电机与变频器的读数、趋势和采样记录。</p></div><a className="text-link" href="#realtime">查看采样趋势 →</a></div><figure className="equipment-figure"><img className="equipment-illustration" src={`${import.meta.env.BASE_URL}assets/illustrations/motor-drive.svg`} alt="电机与变频器连接关系的示意图" width="420" height="200" decoding="async" /><figcaption>电机与变频器 · 驱动链示意</figcaption></figure></section>
 					<section aria-label="运行信息" className="running-grid">{runningCards(runningFields)}</section>
 					<section className="panel-card" aria-label="完整参数">
 						<div className="section-heading"><h2>完整参数</h2><a className="text-link" href="#records">查看采样明细 →</a></div>
@@ -161,7 +159,7 @@ export function App() {
 				{(view === "realtime" || (browsingHistory && range)) && <>
 					<section className="panel-card" aria-label="采样趋势">
 						<div className="section-heading"><div><h2>采样趋势</h2></div><div className="chart-controls"><label>查看指标 <select aria-label="查看指标" value={metric} onChange={(event) => setMetric(event.target.value as typeof metric)}><optgroup label="对比曲线"><option value="speed">转速对比</option><option value="torque">转矩对比</option></optgroup><optgroup label="单项指标">{numericFields.map((field) => <option key={field} value={field}>{displayFieldLabel(field)}</option>)}</optgroup></select></label></div></div>
-							{loading && !data ? <p className="chart-empty">正在读取当前设备采样…</p> : <TrendChart key={`${table}/${limit}/${metric}/${browsingHistory ? `${range?.from}/${range?.to}/${samplePage}` : "realtime"}`} samples={data?.samples ?? []} fields={chartFields} title={`${latest?.raw.device_name || `G120 电机 ${motor}`} · ${sourceLabel} · 采样趋势`} />}
+							{loading && !data ? <p className="chart-empty">正在读取当前设备采样…</p> : <TrendChart key={`${table}/${limit}/${metric}/${browsingHistory ? `${range?.from}/${range?.to}/${samplePage}` : "realtime"}`} samples={data?.samples ?? []} fields={chartFields} title={`${latest?.raw.device_name || `G120 电机 ${table === "real_data" ? 1 : table.replace("real_data_0", "")}`} · ${sourceLabel} · 采样趋势`} />}
 						<p className="muted small window-count">{windowCount}</p>
 					</section>
 					{!browsingHistory && <><section aria-label="六项采样仪表" className="gauge-grid">{gaugeFields.map((field) => <Gauge key={field} label={fieldLabels[field]} unit={fieldUnits[field]!} value={latest?.values[field] ?? null} range={gaugeRanges[field]} samples={data?.samples.map((sample) => sample.values[field]) ?? []} />)}</section>
