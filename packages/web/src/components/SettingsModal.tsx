@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { resolveModel } from "../model-selection.ts";
 import type { AppSettings, BackendStatus } from "../types.ts";
 import { DatabasePanel } from "./DatabasePanel";
 import { Modal } from "./Modal";
@@ -16,13 +17,14 @@ export function SettingsModal({
 	onRefresh: () => void;
 }) {
 	const [draft, setDraft] = useState(settings);
+	const modelId = resolveModel(draft.model, backend.models);
 	const modelUnavailable = !backend.connected || !backend.models.length;
 	return (
 		<Modal title="系统与诊断核心设置" subtitle="保存后应用到当前工作台，并保存在本浏览器" onClose={onClose}>
 			<form
 				onSubmit={(event) => {
 					event.preventDefault();
-					onSave(draft);
+					if (modelId && !modelUnavailable) onSave({ ...draft, model: modelId });
 				}}
 				className="space-y-5 text-sm"
 			>
@@ -36,11 +38,13 @@ export function SettingsModal({
 					DCMA Agent 模型
 					<select
 						className="form-control"
-						value={draft.model}
+						value={modelId}
 						disabled={modelUnavailable}
 						onChange={(event) => setDraft({ ...draft, model: event.target.value })}
 					>
-						<option value="">请选择已授权模型</option>
+						<option value="" disabled>
+							请选择已授权模型
+						</option>
 						{backend.models.map((model) => (
 							<option value={model.id} key={model.id}>
 								{model.name}
@@ -96,7 +100,7 @@ export function SettingsModal({
 					</button>
 					<button
 						type="submit"
-						disabled={!draft.model || modelUnavailable}
+						disabled={!modelId || modelUnavailable}
 						className="px-4 py-2 bg-blue-600 text-white rounded-xl disabled:opacity-40"
 					>
 						保存并应用

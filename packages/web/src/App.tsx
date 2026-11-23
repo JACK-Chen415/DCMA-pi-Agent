@@ -14,6 +14,7 @@ import { createConversationStorage } from "./conversation-storage.ts";
 import { dashboardTables, databaseDataset, databaseDevice, useDashboard } from "./dashboard-data.ts";
 import { downloadText, exportStatusEvent } from "./download.ts";
 import { createMessageId } from "./message-id.ts";
+import { resolveModel } from "./model-selection.ts";
 import { loadWorkspace, storageKey } from "./storage.ts";
 import { parseTelemetry, telemetryCsv } from "./telemetry.ts";
 import type { AppSettings, BackendStatus, ChatMessage } from "./types.ts";
@@ -68,6 +69,7 @@ export function App() {
 	const busy = generatingConversations.length > 0;
 	const isStreaming = generatingConversations.some((item) => item.id === workspace.activeId);
 	const settings = workspace.settings;
+	const modelId = resolveModel(settings.model, backend.models);
 	useEffect(() => {
 		const media = window.matchMedia("(min-width: 1024px)");
 		const resize = () => {
@@ -275,7 +277,7 @@ export function App() {
 			setNotice("当前会话已达到 200 条消息，请开启新对话。");
 			return;
 		}
-		if (!backend.connected || !backend.models.some((model) => model.id === settings.model)) {
+		if (!backend.connected || !modelId) {
 			setNotice("DCMA 模型不可用。请授权模型并在设置中选择。");
 			return;
 		}
@@ -301,7 +303,7 @@ export function App() {
 				content: "",
 				timestamp: now,
 				status: "streaming",
-				engine: `MSPIC-AI · ${settings.model}`,
+				engine: `MSPIC-AI · ${modelId}`,
 			};
 			const next = {
 				...workspace,
@@ -330,7 +332,7 @@ export function App() {
 			const databasePreferred = !offline || settings.databaseEnabled !== false;
 			await followReply(id, assistantId, controller, {
 				requestId: assistantId,
-				model: settings.model,
+				model: modelId,
 				text: text.trim(),
 				context: databasePreferred
 					? JSON.stringify({

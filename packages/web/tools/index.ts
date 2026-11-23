@@ -37,6 +37,7 @@ import {
 	ToolInputError,
 	validateRange,
 } from "./contracts.ts";
+import { diagnosticPreview } from "./diagnostic-preview.ts";
 import { createKnowledgeService } from "./knowledge.ts";
 import { createMonitoringService } from "./monitoring.ts";
 import { loadIndustrialSkillBody } from "./resources.ts";
@@ -156,6 +157,14 @@ export function createIndustrialTools(
 		const data = result as Record<string, unknown>;
 		const table =
 			typeof data.table === "object" && data.table !== null && "name" in data.table ? data.table.name : data.table;
+		if (
+			typeof data.from === "string" &&
+			typeof data.to === "string" &&
+			dashboardTables.includes(table as DashboardTable)
+		) {
+			const profile = await profileFor(table as DashboardTable);
+			if (data.device === undefined) data.device = profile.deviceName ?? null;
+		}
 		if (("latest" in data || Array.isArray(data.rows)) && dashboardTables.includes(table as DashboardTable)) {
 			const profile = await profileFor(table as DashboardTable);
 			data.units = Object.fromEntries(
@@ -177,7 +186,7 @@ export function createIndustrialTools(
 			data.unitSource = profile.unitSource;
 			data.unitBasis = profile.unitBasis;
 		}
-		for (const key of ["a", "b", "statistics"]) await applyUnits(data[key]);
+		for (const key of ["a", "b", "statistics", "state", "quality", "events"]) await applyUnits(data[key]);
 	};
 	let chartsCreated = 0;
 	const range = (params: { table?: DashboardTable; from: string; to: string }): AnalysisRange => ({
@@ -286,7 +295,9 @@ export function createIndustrialTools(
 			!input.to
 		)
 			return undefined;
-		const window = await cached({ from: input.from, to: input.to });
+		// 综合包降级后窗口缓存里是失败 promise，不作为绘图来源；图表改引用聚合统计证据。
+		const pending = cached({ from: input.from, to: input.to });
+		const window = pending ? await pending.catch(() => undefined) : undefined;
 		if (!window) return undefined;
 		return {
 			type: "window",
@@ -299,6 +310,40 @@ export function createIndustrialTools(
 			maxGapSeconds: input.maxGapSeconds ?? input.rule?.maxGapSeconds,
 		};
 	}
+	/** DSH/ZCode-style bounded result: shrink optional detail before failing the call. */
+	const fitResultSize = (result: unknown): unknown => {
+		const size = () => Buffer.byteLength(JSON.stringify(result));
+		if (size() <= 62000) return result;
+		const data = result as Record<string, unknown>;
+		const trend = data.trend as { rows?: unknown[]; sampled?: boolean; samplingNote?: string } | undefined;
+		if (trend?.rows?.length) {
+			while (size() > 62000 && trend.rows.length > 4) trend.rows = trend.rows.filter((_, index) => index % 2 === 0);
+			trend.sampled = true;
+			trend.samplingNote = "原始结果过大，汇总趋势已按间隔降采样；只显示部分汇总时段，均值仍来自完整窗口。";
+		}
+		if (size() > 62000 && Array.isArray(data.events)) {
+			const events = data.events as unknown[];
+			data.events = events.slice(0, 50);
+			data.eventScopeNotice = `原始结果过大，事件明细仅显示前${Math.min(50, events.length)}条；事件总数与代码累计跨度仍来自完整窗口。`;
+		}
+		if (size() > 62000 && Array.isArray(data.rows)) {
+			const rows = data.rows as unknown[];
+			data.rows = rows.slice(0, 50);
+			data.previewNotice = `原始结果过大，原始记录仅显示前${Math.min(50, rows.length)}条；本次不是完整导出。`;
+		}
+		if (size() > 62000 && Array.isArray(data.results)) {
+			const results = data.results as unknown[];
+			data.results = results.slice(0, 5);
+			data.result_notice = "原始结果过大，仅显示前5条命中；本次不是全部命中结果。";
+		}
+		if (size() > 62000) throw new ToolInputError("结果超过62KB，请减少字段、分组或缩小时间范围；未返回部分统计。");
+		return result;
+	};
+	function isAnalysisTooLarge(error: unknown): boolean {
+		const code = error instanceof Error ? error.message : "";
+		return code === "ANALYSIS_TOO_LARGE" || /20000行或16MB/.test(code);
+	}
+
 	function tool<T extends TSchema>(
 		name: string,
 		label: string,
@@ -338,11 +383,12 @@ export function createIndustrialTools(
 					AbortSignal.timeout(Math.max(1, Math.min(30000, 90000 - toolTimeUsed))),
 				]);
 				try {
-					const result = await run(params, signal);
-					await applyUnits(result);
+					const fullResult = await run(params, signal);
+					await applyUnits(fullResult);
+					const result = fitResultSize(
+						name === "build_diagnostic_evidence" ? diagnosticPreview(fullResult, 62000) : fullResult,
+					);
 					signal.throwIfAborted();
-					if (Buffer.byteLength(JSON.stringify(result)) > 62000)
-						throw new ToolInputError("结果超过62KB，请减少字段、分组或缩小时间范围；未返回部分统计。");
 					const record = evidence.add(name, params, result);
 					if (saveEvidence) {
 						try {
@@ -353,7 +399,7 @@ export function createIndustrialTools(
 							);
 						}
 					}
-					const source = await drawingSource(name, params, result);
+					const source = await drawingSource(name, params, fullResult);
 					if (source) chartSources.set(record.id, source);
 					delivery.record(record);
 					const chart: ChartReference | null =
@@ -412,7 +458,7 @@ export function createIndustrialTools(
 		tool(
 			"submit_analysis",
 			"校验并交付分析",
-			"统计、事件及运行分析必须通过此工具交付，不能直接写自由正文。format为brief或report；claims只选择本轮成功evidenceId及结论kind，可选metric、code、itemId。metric_summary/trend/condition_count引用summarize_metrics；events/event_pattern引用get_code_events，event_pattern须code；manual引用search_fault_knowledge或lookup_fault_code，可用itemId选条目；threshold引用analyze_threshold_events，continuity引用check_data_quality，comparison引用compare_metric_windows，state引用assess_device_state，reading引用采样工具。数值、措辞及出处由程序生成，不传自由文本。stability_ranking、relative_level、event_alignment没有对应计算时将被拒绝。先完成需要的图表再交付。校验失败只允许修正一次，成功后结束本轮。",
+			"统计、事件及运行分析必须通过此工具交付，不能直接写自由正文。format为brief或report；claims选择本轮成功evidenceId及结论kind。先写定性结论：conclusion（核心结论）、process（变化过程）、hypothesis（候选原因，待验证）、recommendation（建议核查），必须填text，只写定性文字，不写数字、原值、时间或代码；这些文字会与数据结论一起发布。数值和表格由其他kind生成：metric_summary/trend/condition_count引用summarize_metrics；events/event_pattern引用get_code_events，event_pattern须code；manual引用search_fault_knowledge或lookup_fault_code，可用itemId选条目；threshold引用analyze_threshold_events，continuity引用check_data_quality，comparison引用compare_metric_windows，state引用assess_device_state或综合证据包，reading引用采样工具。stability_ranking、relative_level、event_alignment没有对应计算时将被拒绝。先完成需要的图表再交付。校验失败按原因修正一次，成功后结束本轮。",
 			analysisPlanSchema,
 			async (params) => delivery.submit(params),
 		),
@@ -657,26 +703,52 @@ export function createIndustrialTools(
 		tool(
 			"build_diagnostic_evidence",
 			"诊断证据整理",
-			"一次完成同一窗口的综合诊断证据包，内部已查询设备资料并计算质量、指标统计、故障报警事件；不要先逐项调用这些工具再重复打包。仅单项统计不用此工具。可附本轮知识证据编号，不确认根因。",
+			"一次完成同一窗口的综合诊断证据包，内部已查询设备资料并计算质量、指标统计、故障报警事件，并在存在人工状态规则时评估状态；不要先逐项调用这些工具再重复打包。仅单项统计不用此工具。可附本轮知识证据编号，不确认根因。",
 			object({
 				...rangeInput,
 				...metricsInput,
 				maxGapSeconds: Type.Number({ exclusiveMinimum: 0, maximum: 86400 }),
+				staleAfterSeconds: Type.Optional(Type.Number({ minimum: 1, maximum: 86400 })),
 				evidenceIds: Type.Optional(Type.Array(text(36), { minItems: 1, maxItems: 6, uniqueItems: true })),
 			}),
 			async (params, signal) => {
-				const window = await windowFor(params, signal);
 				const metrics = params.metrics ?? defaultMetrics;
 				const references = params.evidenceIds ? evidence.get(params.evidenceIds) : [];
-				return {
-					profile: await services.knowledge.getDeviceProfile(window.table),
-					quality: checkDataQuality(window, metrics, params.maxGapSeconds),
-					statistics: summarizeMetrics(window, metrics),
-					events: codeEventsFromWindow(window),
+				let window: AnalysisWindow | null = null;
+				try {
+					window = await windowFor(params, signal);
+				} catch (error) {
+					// 超出原始明细上限时降级为数据库聚合统计和流式事件，而不是整个综合包失败。
+					if (error instanceof ToolInputError || !isAnalysisTooLarge(error)) throw error;
+				}
+				const profile = await services.knowledge.getDeviceProfile((window ?? range(params)).table);
+				const state =
+					window && profile.stateRules
+						? assessDeviceState(window, params.staleAfterSeconds ?? 60, Date.now(), profile.stateRules)
+						: null;
+				const statistics = window
+					? summarizeMetrics(window, metrics)
+					: await loadMetricSummary(validateRange(range(params)), metrics, signal);
+				const events = window
+					? codeEventsFromWindow(window)
+					: await getCodeEvents(await codeEventsFor({ ...range(params), page: 1 }, signal));
+				const quality = window ? checkDataQuality(window, metrics, params.maxGapSeconds) : null;
+				const result = {
+					profile,
+					state,
+					quality,
+					statistics,
+					events,
 					references,
 					rootCause: "not_confirmed",
-					limitations: ["采样事件不等于独立确认的故障原因", "工况、资料适用性和现场检查仍需确认"],
+					limitations: [
+						"采样事件不等于独立确认的故障原因",
+						"工况、资料适用性和现场检查仍需确认",
+						...(window ? [] : ["窗口超过原始明细上限：质量与逐点连续性未执行，统计改用数据库聚合。"]),
+					],
 				};
+				if ("trend" in statistics) previewSources.set(result, { type: "summary", result: statistics, units: {} });
+				return result;
 			},
 		),
 		tool(

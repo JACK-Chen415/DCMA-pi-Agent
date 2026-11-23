@@ -26,15 +26,16 @@ test("web resources retain five skill entries and preload each shared workflow o
 			"work-order-draft",
 		],
 	);
+	// Skill 正文按需加载：常驻上下文只有名称与适用意图，正文经 load_skill 取回。
 	const prompt = loader.getAppendSystemPrompt().join("\n\n").replace(/\r\n/g, "\n");
 	for (const skill of skills) {
 		const content = readFileSync(skill.filePath, "utf8").trim();
 		const { frontmatter, body } = parseFrontmatter<{ metadata: { version: string } }>(content);
 		assert.match(frontmatter.metadata.version, /^\d+\.\d+\.\d+$/);
 		assert.ok(body.length > 0);
-		assert.ok(prompt.includes(`<industrial_skill name="${skill.name}">`));
+		assert.ok(prompt.includes(skill.name));
 		assert.ok(prompt.includes(skill.description));
-		assert.equal(prompt.split(body.replace(/\r\n/g, "\n").trim()).length - 1, 1);
+		assert.equal(prompt.includes(body.trim()), false);
 		assert.equal(skill.disableModelInvocation, false);
 	}
 	assert.equal(loader.getAgentsFiles().agentsFiles.length, 0);
@@ -65,10 +66,10 @@ test("web resources retain five skill entries and preload each shared workflow o
 		normalizeSkillText(faultInstructions.replace(/^description: .*$/m, "description: CLONED")),
 		"RCA Skill must be a clone; the original fault-investigation Skill remains intact",
 	);
-	assert.ok(prompt.includes("与已加载的 fault-investigation 共用同一工作流及完成标准。"));
+	assert.ok(prompt.includes("独立的证据链 RCA 工作流"));
 });
 
-test("SDK sends skill bodies on real prompt turns without granting file or terminal tools", async () => {
+test("SDK sends the skill index on real prompt turns without bodies, file or terminal tools", async () => {
 	const loader = createIndustrialResourceLoader();
 	const harness = await createHarness({
 		resourceLoader: loader,
@@ -94,9 +95,9 @@ test("SDK sends skill bodies on real prompt turns without granting file or termi
 				assert.ok(prompt.includes(industrialSystemPrompt));
 				for (const skill of loader.getSkills().skills) {
 					const { body } = parseFrontmatter(readFileSync(skill.filePath, "utf8"));
-					assert.ok(prompt.includes(`<industrial_skill name="${skill.name}">`));
 					assert.ok(prompt.includes(skill.description));
-					assert.equal(prompt.replace(/\r\n/g, "\n").split(body.replace(/\r\n/g, "\n").trim()).length - 1, 1);
+					// 常驻提示只带索引，不带正文；正文由 load_skill 工具按需取回。
+					assert.equal(prompt.includes(body.trim()), false);
 				}
 				assert.deepEqual(getCurrentTools(context.messages), []);
 				observed++;

@@ -57,7 +57,7 @@ test("missing private profiles retain project measurement units for all five sou
 	}
 });
 
-test("simulation setup configures units and adds state rules only for new scenario sources", async () => {
+test("simulation setup configures units and observation-based state rules for legacy simulated tables", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "dcma-simulation-"));
 	try {
 		const output = join(directory, "profiles.json");
@@ -71,7 +71,8 @@ test("simulation setup configures units and adds state rules only for new scenar
 			assert.equal(profile.model, null);
 			assert.equal(profile.manufacturer, null);
 			assert.equal(profile.ratedValues, null);
-			assert.equal(profile.stateRules, null);
+			assert.equal(profile.stateRules?.version, "dcma_observed_v1");
+			assert.equal(profile.stateRules?.rules.length, 2);
 			assert.equal(profile.measurements.length, 18);
 			assert.ok(profile.measurements.every((item) => item.unitStatus === "user_configured"));
 			assert.equal(profile.measurements.find((item) => item.field === "current_actual")?.unit, "A");

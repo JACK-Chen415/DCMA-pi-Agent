@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { readFile, unlink, writeFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { test } from "node:test";
-import { getFaultKnowledgeHealth, getFaultKnowledgeIndex, searchFaultKnowledge } from "../knowledge-index.ts";
+import {
+	getFaultKnowledgeHealth,
+	getFaultKnowledgeIndex,
+	lookupBundledFaultCode,
+	searchFaultKnowledge,
+} from "../knowledge-index.ts";
 import { buildFaultKnowledgeVectorIndex, getVectorIndexPath } from "../knowledge-vectors.ts";
 
 test("private vector index path is resolved after environment configuration", () => {
@@ -112,4 +117,36 @@ test("knowledge search uses cloud vectors while retaining exact fault-code match
 		if (previousVectorIndex) await writeFile(vectorPath, previousVectorIndex);
 		else await unlink(vectorPath).catch(() => {});
 	}
+});
+
+test("G120 queries fall back to the S120 manual as a labeled reference", async () => {
+	const result = await searchFaultKnowledge({ q: "G120 电机堵转 F07900", limit: 3 });
+	assert.equal(result.results.length > 0, true);
+	assert.equal((result as { reference_only?: boolean }).reference_only, true);
+	assert.equal(result.retrieval_log.family_fallback, true);
+	assert.equal((result.results[0] as { applicability?: string } | undefined)?.applicability, "reference_only");
+	assert.match(result.results[0]?.source_file ?? "", /S120/);
+});
+
+test("bundled exact lookup resolves shipped manuals and flags cross-series references", async () => {
+	const s120 = await lookupBundledFaultCode({
+		manufacturer: "西门子",
+		model: "SINAMICS S120/S150",
+		version: "06/2020",
+		code: "F30001",
+		kind: "fault",
+	});
+	assert.equal(s120.found, true);
+	assert.equal(s120.searchedSource, "s120-fault-manual");
+	assert.equal(s120.applicability_notice, null);
+	const g120 = await lookupBundledFaultCode({
+		manufacturer: "西门子",
+		model: "G120",
+		version: "未确认",
+		code: "F07900",
+		kind: "fault",
+	});
+	assert.equal(g120.found, true);
+	assert.match(g120.applicability_notice ?? "", /参考/);
+	assert.equal(g120.matches[0]?.applicability, "reference_only");
 });

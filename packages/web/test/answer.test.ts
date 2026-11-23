@@ -58,8 +58,8 @@ test("renderer preserves exact counts and configured units without inventing ran
 	const { record, plan } = fixture();
 	const output = renderAnalysis(plan, [record]);
 	assert.match(output, /151201条/);
-	assert.match(output, /平均38 \(℃\)/);
-	assert.match(output, /范围38 \(℃\)～38 \(℃\)/);
+	assert.match(output, /平均38℃/);
+	assert.match(output, /范围38℃～38℃/);
 	assert.match(output, /℃/);
 	assert.doesNotMatch(output, /最平稳|偏小|已确认|用户配置|数据覆盖完整|完整采样/);
 	const report = renderAnalysis({ ...plan, format: "report" }, [record]);
@@ -93,13 +93,23 @@ test("unsupported claims, arbitrary prose, foreign evidence and wrong evidence t
 		id: "22222222-2222-4222-8222-222222222222",
 		result: { ...(record.result as object), from: "2026-10-20T16:00:00Z" },
 	};
+	const mixed = renderAnalysis(
+		{ format: "brief", claims: [...plan.claims, { kind: "metric_summary", evidenceId: other.id }] },
+		[record, other],
+	);
+	assert.match(mixed, /时间：/);
+	const foreign: EvidenceRecord = {
+		...other,
+		id: "33333333-3333-4333-8333-333333333333",
+		result: { ...(other.result as object), table: "real_data_02" },
+	};
 	assert.throws(
 		() =>
 			renderAnalysis(
-				{ format: "brief", claims: [...plan.claims, { kind: "metric_summary", evidenceId: other.id }] },
-				[record, other],
+				{ format: "brief", claims: [...plan.claims, { kind: "metric_summary", evidenceId: foreign.id }] },
+				[record, foreign],
 			),
-		/混用了设备或时间窗口/,
+		/混用了设备/,
 	);
 });
 
@@ -172,7 +182,7 @@ test("event and manual claims share each cited meaning and applicability reminde
 			assert.equal(output.match(/现场型号/g)?.length, 1);
 			assert.match(output, /报警事件1次/);
 			assert.match(output, /232/);
-			assert.match(output, /确认适用后按现场规程执行/);
+			assert.match(output, /按现场规程执行/);
 			assert.doesNotMatch(output, /含义未确认|## 手册依据\n\n(?:##|限制说明|$)/);
 		}
 	}
@@ -212,6 +222,7 @@ test("the delivery gate never releases a skipped, failed or forged analysis draf
 	const failed = createAnswerDelivery();
 	failed.start("get_code_events");
 	assert.doesNotMatch(failed.finish("故障0次，一切正常"), /故障0次|一切正常/);
+	assert.throws(() => failed.submit({}));
 	assert.throws(() => failed.submit({}));
 	assert.throws(() => failed.submit({}));
 	assert.equal(failed.exhausted, true);
@@ -261,7 +272,7 @@ test("computed thresholds, condition counts, trends, state rules and unit-consis
 		[summaryRecord, profile, threshold],
 	);
 	assert.match(output, /大于50的采样点为2个/);
-	assert.match(output, /每0.333333分钟汇总均值/);
+	assert.match(output, /每0.3333分钟汇总均值/);
 	assert.match(output, /确认1次满足条件的事件/);
 	const badProfile = {
 		...profile,
@@ -367,4 +378,121 @@ test("raw database tables display measurement units without labeling code column
 	assert.match(output, /实际功率（kW）/);
 	assert.match(output, /\| 38 \| 1500 \| 1\.5 \| 0 \|/);
 	assert.doesNotMatch(output, /故障码（/);
+});
+
+test("model-authored conclusion, process and recommendation lead the answer without numbers", () => {
+	const { record } = fixture();
+	const output = renderAnalysis(
+		{
+			format: "brief",
+			claims: [
+				{ kind: "conclusion", evidenceId: record.id, text: "该时段温度平稳，未发现明显异常。" },
+				{ kind: "metric_summary", evidenceId: record.id },
+				{ kind: "process", evidenceId: record.id, text: "温度先小幅上升后回落，转速基本跟随设定值。" },
+				{ kind: "hypothesis", evidenceId: record.id, text: "可能是负载周期性变化导致。" },
+				{
+					kind: "recommendation",
+					evidenceId: record.id,
+					text: "一、建议延长观察窗口并核对负载记录。二、核对报警历史。",
+				},
+			],
+		},
+		[record],
+	);
+	assert.match(output, /^该时段温度平稳/);
+	assert.match(output, /## 关键指标/);
+	assert.match(output, /## 候选原因（待验证）\n\n- 可能是负载周期性变化导致/);
+	assert.match(output, /## 建议核查\n\n1\. 建议延长观察窗口并核对负载记录。\n2\. 核对报警历史。/);
+	assert.match(output, /温度先小幅上升后回落/);
+	assert.match(output, /可能是负载周期性变化导致/);
+	assert.match(output, /建议延长观察窗口/);
+	assert.match(output, /候选原因均为待验证假设/);
+	assert.match(output, /建议仅为核查动作/);
+	assert.doesNotMatch(output, /📌|💡/);
+});
+
+test("narrative claims reject fabricated numbers and unsupported healthy verdicts", () => {
+	const { record, window } = fixture();
+	assert.throws(
+		() =>
+			renderAnalysis(
+				{ format: "brief", claims: [{ kind: "conclusion", evidenceId: record.id, text: "温度42度" }] },
+				[record],
+			),
+		/只写定性文字/,
+	);
+	const withCodes = renderAnalysis(
+		{
+			format: "brief",
+			claims: [{ kind: "conclusion", evidenceId: record.id, text: "F07900堵转后按g120_sim_v1约定恢复RUNNING。" }],
+		},
+		[record],
+	);
+	assert.match(withCodes, /F07900堵转/);
+	assert.throws(
+		() =>
+			renderAnalysis(
+				{
+					format: "brief",
+					claims: [{ kind: "process", evidenceId: record.id, text: "30分钟内转矩抬升后触发保护" }],
+				},
+				[record],
+			),
+		/只写定性文字/,
+	);
+	assert.throws(
+		() =>
+			renderAnalysis(
+				{ format: "brief", claims: [{ kind: "conclusion", evidenceId: record.id, text: "设备运行正常" }] },
+				[record],
+			),
+		/尚无状态评估证据/,
+	);
+	for (const row of window.records) row.raw.speed_actual = 100;
+	window.availableFields.push("speed_actual");
+	const state = createEvidenceStore().add(
+		"assess_device_state",
+		{},
+		assessDeviceState(window, 60, Date.parse(window.to), {
+			source: "fixture",
+			version: "1",
+			rules: [{ state: "running", all: [{ field: "speed_actual", operator: "gt", value: 50 }] }],
+		}),
+	);
+	const output = renderAnalysis(
+		{ format: "brief", claims: [{ kind: "conclusion", evidenceId: state.id, text: "设备运行正常" }] },
+		[state],
+	);
+	assert.match(output, /设备运行正常/);
+	assert.throws(
+		() =>
+			renderAnalysis(
+				{
+					format: "brief",
+					claims: [{ kind: "conclusion", evidenceId: record.id, text: "这台电机持续处于运行状态" }],
+				},
+				[record],
+			),
+		/尚无状态评估证据/,
+	);
+});
+
+test("claims from different time windows are labeled instead of rejected", () => {
+	const store = createEvidenceStore();
+	const { window } = chartFixture([38, 38, 38]);
+	const second = { ...window, from: "2026-10-21T16:00:10.000Z", to: "2026-10-21T16:00:40.000Z" };
+	const first = store.add("summarize_metrics", {}, summarizeMetrics(window, ["motor_temp"]));
+	const later = store.add("summarize_metrics", {}, summarizeMetrics(second, ["motor_temp"]));
+	const output = renderAnalysis(
+		{
+			format: "brief",
+			claims: [
+				{ kind: "metric_summary", evidenceId: first.id },
+				{ kind: "metric_summary", evidenceId: later.id },
+			],
+		},
+		[first, later],
+	);
+	assert.match(output, /时间：2026-10-22 00:00:00至2026-10-22 00:00:40/);
+	assert.match(output, /时间：2026-10-22 00:00:10至2026-10-22 00:00:40/);
 });

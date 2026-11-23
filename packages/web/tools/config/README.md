@@ -46,7 +46,7 @@
 
 `getDeviceProfile` 还返回独立的 `codeConventions`：按已确认的 DCMA 采样约定，故障码0为“未报告故障”、报警码0为“未报告报警”；非零码需检索手册，缺失或空白为未知。该返回信息不属于配置文件字段，不代表已配置 `stateRules`，也不解释 `status`、控制字或状态字。零码不能证明设备正在运行、在线或健康。
 
-运行 `node scripts/configure-simulation-profiles.ts` 会添加缺少的模拟来源，保留已有条目。新增的四个 `sim_` 场景使用 `g120_sim_v1` 的 `RUNNING`、`STOPPED`、`FAULT` 约定。原有四个 `real_data_01` 至 `real_data_04` 模拟来源仅初始化设备资料和单位。配置中型号或规则为 `null` 不影响已填写的单位与独立的文档检索。
+运行 `node scripts/configure-simulation-profiles.ts` 会添加缺少的模拟来源，保留已有条目。新增的四个 `sim_` 场景使用 `g120_sim_v1` 的 `RUNNING`、`STOPPED`、`FAULT` 约定。原有四个 `real_data_01` 至 `real_data_04` 模拟来源初始化设备资料、单位，并自动补上观测状态规则 `dcma_observed_v1`：该规则只依据演示数据中 status 为 0 或 42 时转速与电流均处于运行区间的观测，不是厂家状态码定义；引用“运行”时需说明规则来源，已有手工配置的规则不会被覆盖。配置中型号或规则为 `null` 不影响已填写的单位与独立的文档检索。
 
 补齐期间应暂停手动保存 `profiles.json`。脚本会在替换前检查设备资料是否已变化。如果进程被强制终止并留下 `profiles.json.lock` 空目录，确认没有脚本正在运行后可删除该空目录，再重新执行。
 

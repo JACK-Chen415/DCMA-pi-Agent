@@ -90,7 +90,7 @@ test("the real SDK rejects a ranking, accepts one correction and terminates on v
 		assert.equal(getToolResult(harness, "submit_analysis").isError, false);
 		assert.match(draft, /温度最平稳/);
 		const answer = delivery.finish(draft);
-		assert.match(answer, /平均38，范围38～38/);
+		assert.match(answer, /平均38℃，范围38℃～38℃/);
 		assert.doesNotMatch(answer, /温度最平稳|电流偏小|自由结论/);
 	} finally {
 		unsubscribe();

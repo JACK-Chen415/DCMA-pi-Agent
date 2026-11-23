@@ -21,6 +21,8 @@ export const toolLabels: Record<string, string> = {
 	export_analysis_report: "导出证据报告",
 	get_alert_history: "读取告警记录",
 	manage_monitoring_task: "处理监测任务",
+	load_skill: "加载工业 Skill",
+	get_signal_metadata: "查询字段字典",
 };
 export interface ToolStep {
 	callId: string;

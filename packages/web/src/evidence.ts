@@ -43,7 +43,12 @@ export function evidenceSections(record: EvidenceRecord): EvidenceSection[] {
 			fact("时间范围 · 北京时间", `${time(data.from)} ～ ${time(data.to)}`);
 		}
 		if (typeof data.records === "number") fact("覆盖采样", `${data.records.toLocaleString("zh-CN")} 条`);
-		if (data.truncated === true || data.hasMore === true)
+		if (record.tool === "read_industrial_dashboard" && depth === 0)
+			section.notes.push(
+				`近期采样预览，共 ${typeof data.returned === "number" ? data.returned : 0} 条。历史时段统计使用单独查询。`,
+			);
+		else if (typeof data.eventScopeNotice === "string") section.notes.push(data.eventScopeNotice);
+		else if (data.truncated === true || data.hasMore === true)
 			section.warnings.push("此结果有截断或后续记录，不能作为全量统计。");
 		else if (data.complete === true) fact("统计范围", "完整查询时段");
 		if (data.sampled === false) section.notes.push("统计使用原始采样，均值按采样点计算。");

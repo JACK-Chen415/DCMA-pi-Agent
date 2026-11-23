@@ -10,6 +10,7 @@ import {
 	numericFields,
 } from "../../../dashboard/database/dashboard-types.ts";
 import { measurementUnits } from "../../../dashboard/database/measurement-units.ts";
+import { lookupBundledFaultCode } from "../knowledge-index.ts";
 import { type StateRuleSet, ToolInputError } from "./contracts.ts";
 
 const MAX_BYTES = 1024 * 1024;
@@ -353,13 +354,24 @@ export function createKnowledgeService(directory: string) {
 				resultSize += size;
 				matches.push(match);
 			}
+			const bundled = await lookupBundledFaultCode({
+				manufacturer: device.manufacturer,
+				model: device.model,
+				version: device.version,
+				code: lookupCode,
+				kind: query.kind as "fault" | "alarm" | "status" | "control",
+			});
+			const merged = [...matches, ...bundled.matches].slice(0, 10);
 			return {
-				configured: data !== null,
-				found: found.length > 0,
-				total: found.length,
-				hasMore: found.length > matches.length,
-				matches,
+				configured: data !== null || bundled.configured,
+				found: merged.length > 0,
+				total: found.length + bundled.total,
+				hasMore: found.length + bundled.total > merged.length,
+				matches: merged,
 				verified: false as const,
+				sourceKind: data !== null ? (bundled.found ? "mixed" : "local") : "bundled",
+				searchedSource: bundled.searchedSource ?? null,
+				...(bundled.applicability_notice ? { applicability_notice: bundled.applicability_notice } : {}),
 			};
 		},
 		async searchMaintenanceKnowledge(input: MaintenanceSearchInput) {

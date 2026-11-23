@@ -20,6 +20,18 @@ const simScenes: Record<string, { deviceName: string; scene: string }> = {
 	sim_f30002_overvoltage: { deviceName: "模拟电机-过电压场景", scene: "快速减速回馈触发F30002过电压保护" },
 	sim_f07011_overtemp: { deviceName: "模拟电机-超温场景", scene: "持续过载触发F07011电机超温，含报警、停机和冷却恢复" },
 };
+// The legacy real_data_01..04 tables only expose numeric status 0/42. In the observed demo data
+// both occur with running speed and current; 42 also carries alarm A07089. This is an observation
+// convention, not a vendor state-code definition, and is limited to the four simulated tables.
+const legacyStateRules = {
+	source:
+		"DCMA演示数据观测约定：status为0或42时实测转速与电流均处于运行区间；未取得厂家状态码定义，仅用于real_data_01至04模拟表。",
+	version: "dcma_observed_v1",
+	rules: [
+		{ state: "running", all: [{ field: "status", operator: "eq", value: "0" }] },
+		{ state: "running", all: [{ field: "status", operator: "eq", value: "42" }] },
+	],
+};
 // status uses RUNNING/STOPPED/FAULT strings in the simulation tables (g120_sim_v1).
 const simStateRules = {
 	source: "模拟数据g120_sim_v1状态字段约定（演示约定）",
@@ -46,7 +58,7 @@ const profiles = dashboardTables
 				? `G120模拟场景表（g120_sim_v1，每3秒新增一条、保留7天）；场景：${scene?.scene}。测点单位沿用展板 fieldUnits；status字段用RUNNING/STOPPED/FAULT字符串，字段含义以signal_metadata字典为准；物理参数属演示约定，未绑定真实电机型号或现场阈值。`
 				: "用户确认电机1～4为模拟设备；测点单位沿用已确认的展板 fieldUnits；未绑定真实电机型号、额定值或异常阈值。",
 			units: measurementUnits,
-			...(isSim ? { stateRules: simStateRules } : {}),
+			stateRules: isSim ? simStateRules : legacyStateRules,
 		};
 	});
 
@@ -58,11 +70,21 @@ try {
 	const current = await readDeviceProfiles(output);
 	const existing = current ?? [];
 	const missing = profiles.filter(({ table }) => !existing.some((profile) => profile.table === table));
-	if (missing.length) {
+	// Fill the observation-based state rules for existing legacy simulated profiles without
+	// touching user-provided names, units or other fields.
+	const legacyTables = new Set(["real_data_01", "real_data_02", "real_data_03", "real_data_04"]);
+	const upgraded = existing.map((profile) => {
+		const source = profiles.find((item) => item.table === profile.table);
+		return source?.stateRules && !profile.stateRules && legacyTables.has(profile.table)
+			? { ...profile, stateRules: source.stateRules }
+			: profile;
+	});
+	const changed = upgraded.some((profile, index) => profile !== existing[index]);
+	if (missing.length || changed) {
 		const staging = await mkdtemp(join(directory, ".profiles-"));
 		try {
 			const next = join(staging, "profiles.json");
-			await writeFile(next, `${JSON.stringify({ profiles: [...existing, ...missing] }, null, 2)}\n`, { mode: 0o600 });
+			await writeFile(next, `${JSON.stringify({ profiles: [...upgraded, ...missing] }, null, 2)}\n`, { mode: 0o600 });
 			await readDeviceProfiles(next);
 			if (current === null) {
 				await link(next, output);
@@ -75,7 +97,7 @@ try {
 			await rm(staging, { recursive: true });
 		}
 	}
-	console.log(`已补齐${missing.length}个模拟来源，保留${existing.length}个已有来源：${output}`);
+	console.log(`已补齐${missing.length}个模拟来源，更新${changed ? "部分" : "0"}个状态规则，保留${existing.length}个已有来源：${output}`);
 } finally {
 	await rmdir(lock);
 }

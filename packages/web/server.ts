@@ -2,6 +2,7 @@ import { readFile, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, resolve, sep } from "node:path";
 import { loadEnvFile } from "node:process";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import {
 	createAgentSession,
@@ -39,7 +40,7 @@ try {
 	if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
 }
 const production = process.argv.includes("--production");
-const toolDirectory = resolve(root, ".dcma-runtime");
+const toolDirectory = resolve(root, process.env.DCMA_RUNTIME_DIR ?? ".dcma-runtime");
 await preparePrivateDirectory(toolDirectory);
 const industrial = createIndustrialServices(toolDirectory);
 const conversations = createConversationStore(toolDirectory);
@@ -60,13 +61,14 @@ const getRuntime = () => {
 const activeSessions = new Set<Awaited<ReturnType<typeof createAgentSession>>["session"]>();
 let activeChatRequests = 0;
 
-// Reasoning effort per request; reasoning output is billed at full output price, so default low.
+// Reasoning effort per request. Medium keeps multi-step evidence selection and answer writing coherent;
+// lower levels repeatedly collapsed to the shortest submit_analysis path in the 2026-11-15 comparison.
 const allowedThinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const thinkingLevel: ThinkingLevel = allowedThinkingLevels.includes(
-	(process.env.DCMA_THINKING_LEVEL ?? "low") as (typeof allowedThinkingLevels)[number],
+	(process.env.DCMA_THINKING_LEVEL ?? "medium") as (typeof allowedThinkingLevels)[number],
 )
-	? ((process.env.DCMA_THINKING_LEVEL ?? "low") as ThinkingLevel)
-	: "low";
+	? ((process.env.DCMA_THINKING_LEVEL ?? "medium") as ThinkingLevel)
+	: "medium";
 
 function json(response: ServerResponse, status: number, value: unknown): void {
 	response.writeHead(status, {
@@ -297,6 +299,17 @@ async function api(request: IncomingMessage, response: ServerResponse, path: URL
 			void session.abort();
 		});
 		const emit = run.emit;
+		const emitAnswer = async (answer: string) => {
+			// Publish validated Markdown in batches without splitting individual table blocks.
+			const blocks = answer.split(/(?<=\n\n)(?=\S)/u);
+			const batchSize = Math.max(1, Math.ceil(blocks.length / 24));
+			for (let index = 0; index < blocks.length; index += batchSize) {
+				if (index > 0) await delay(24);
+				if (run.finished) return;
+				const text = blocks.slice(index, index + batchSize).join("");
+				if (text) emit({ type: "delta", text });
+			}
+		};
 		const textStream = createTextStream();
 		const unsubscribe = session.subscribe((event) => {
 			if (event.type === "tool_execution_start") delivery.start(event.toolName);
@@ -304,7 +317,7 @@ async function api(request: IncomingMessage, response: ServerResponse, path: URL
 				event.type === "tool_execution_end" &&
 				event.toolName === "submit_analysis" &&
 				event.isError &&
-				++deliveryFailures >= 2
+				++deliveryFailures >= 3
 			) {
 				stoppedForDelivery = true;
 				void session.abort();
@@ -349,14 +362,16 @@ async function api(request: IncomingMessage, response: ServerResponse, path: URL
 				`当前时刻（UTC）：${new Date().toISOString()}；北京时间为UTC+08:00。\n数据模式：${body.database ? "优先查询 MySQL；需要实际数据时必须调用工具，失败不能用示例替代。仅澄清需求时无需读取数据。" : "优先分析侧栏示例或导入文件；用户明确询问数据库时仍可调用数据库工具，不能混淆数据来源。"}\n当前背景：\n${body.context}\n\n此前对话（JSON）：\n${JSON.stringify(body.history)}\n\n当前用户问题：\n${body.text}`,
 			);
 			if (run.signal.aborted) return;
+			timeout.dispose();
 			const answer = delivery.finish(draft);
-			if (answer) emit({ type: "delta", text: answer });
+			if (answer) await emitAnswer(answer);
 			if (failure) emit({ type: "error", message: failure });
 			else if (!answer) emit({ type: "error", message: "模型未返回文本，请尝试其他已授权模型。" });
 			else emit({ type: "done" });
 		} catch {
+			timeout.dispose();
 			const answer = delivery.finish(draft);
-			if (answer) emit({ type: "delta", text: answer });
+			if (answer) await emitAnswer(answer);
 			if (stoppedForDelivery) emit({ type: "done" });
 			else emit({ type: "error", message: "模型调用失败，请检查授权、网络与上下文长度。" });
 		} finally {

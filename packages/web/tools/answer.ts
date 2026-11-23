@@ -5,6 +5,10 @@ import type { EvidenceRecord } from "../interaction-contracts.ts";
 import { ToolInputError } from "./contracts.ts";
 
 const claimKinds = [
+	"conclusion",
+	"process",
+	"hypothesis",
+	"recommendation",
 	"metric_summary",
 	"trend",
 	"events",
@@ -32,6 +36,7 @@ export const analysisPlanSchema = Type.Object(
 					code: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
 					itemId: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
 					field: Type.Optional(Type.Union([Type.Literal("fault_code"), Type.Literal("alarm_code")])),
+					text: Type.Optional(Type.String({ minLength: 1, maxLength: 600 })),
 				},
 				{ additionalProperties: false },
 			),
@@ -49,6 +54,7 @@ interface AnalysisPlan {
 		code?: string;
 		itemId?: string;
 		field?: "fault_code" | "alarm_code";
+		text?: string;
 	}[];
 }
 type Claim = AnalysisPlan["claims"][number];
@@ -78,6 +84,67 @@ const fallbackKinds: Partial<Record<string, Claim["kind"]>> = {
 	build_diagnostic_evidence: "metric_summary",
 };
 
+/** Qualitative, model-authored claims. They may not carry numbers or codes; those stay in typed claims. */
+const narrativeLabels = {
+	conclusion: "结论",
+	process: "过程分析",
+	hypothesis: "候选原因（待验证）",
+	recommendation: "建议核查",
+} as const;
+const narrativeKinds = new Set<string>(Object.keys(narrativeLabels));
+const narrativeEvidenceTools = new Set<string>([
+	...analysisTools,
+	"search_fault_knowledge",
+	"lookup_fault_code",
+	"get_device_profile",
+	"list_fault_knowledge_sources",
+]);
+const absoluteHealthClaim = /^(?:设备|电机|系统|机组)?(?:运行)?(?:正常|健康|无异常)|^一切正常/;
+
+function hasRunningState(records: EvidenceRecord[]): boolean {
+	return records.some((record) => {
+		const result = record.result as Data | null;
+		if (!result || typeof result !== "object") return false;
+		if (record.tool === "assess_device_state") return result.currentState === "running";
+		if (record.tool === "build_diagnostic_evidence") {
+			const state = result.state as Data | undefined;
+			return Boolean(state && state.currentState === "running");
+		}
+		return false;
+	});
+}
+
+function narrativeText(claim: Claim, records: EvidenceRecord[]): string {
+	const raw = claim.text?.trim() ?? "";
+	if (!raw)
+		throw new ToolInputError(`${narrativeLabels[claim.kind as keyof typeof narrativeLabels]}结论必须提供text。`);
+	if (raw.length > 600) throw new ToolInputError("分析文字过长，请控制在600字以内。");
+	// 设备、代码和场景标识（F07900、g120_sim_v1、CU250）允许出现；纯数值、时刻和持续时间仍由数据结论生成。
+	const withoutIdentifiers = raw.replace(/(?=[A-Za-z_-]*\d)[A-Za-z_][A-Za-z0-9_-]*/g, " ");
+	if (/\d/.test(withoutIdentifiers))
+		throw new ToolInputError(
+			"结论、过程、原因和建议只写定性文字，不写具体数值、时刻或持续时间；数值与时间由metric_summary、events、threshold等结论类型生成。",
+		);
+	if (
+		["conclusion", "process", "hypothesis"].includes(claim.kind) &&
+		(absoluteHealthClaim.test(raw) || /运行状态|正在运行|持续运行|处于运行/.test(raw)) &&
+		!hasRunningState(records)
+	)
+		throw new ToolInputError(
+			"尚无状态评估证据，不能写设备正常或处于运行状态；请引用assess_device_state或综合证据包的state结论，或只描述观测到的迹象。",
+		);
+	if (claim.kind === "hypothesis" || claim.kind === "recommendation") {
+		const items = raw.split(
+			/(?:^|(?<=[。！？；\n]))\s*(?:候选[一二三四五六七八九十]+[：:]|[一二三四五六七八九十]+、)\s*/u,
+		);
+		return items
+			.filter((item) => item.trim())
+			.map((item) => text(item.trim()))
+			.join("\n");
+	}
+	return text(raw);
+}
+
 function object(value: unknown): Data {
 	if (!value || typeof value !== "object" || Array.isArray(value))
 		throw new ToolInputError("证据结构无效，无法生成该结论。");
@@ -95,12 +162,12 @@ function format(value: unknown): string {
 	const numeric = number(value);
 	return Number.isInteger(numeric)
 		? String(numeric)
-		: numeric.toLocaleString("zh-CN", { maximumSignificantDigits: 6, useGrouping: false });
+		: numeric.toLocaleString("zh-CN", { maximumSignificantDigits: 4, useGrouping: false });
 }
 function text(value: unknown): string {
 	return String(value ?? "")
 		.replace(/[\r\n]+/g, " ")
-		.replace(/[\\`*_{}[\]<>#|!]/g, "\\$&");
+		.replace(/[\\`*{}[\]<>#|!]/g, "\\$&");
 }
 function time(value: unknown): string {
 	const instant = typeof value === "string" ? Date.parse(value) : Number.NaN;
@@ -116,7 +183,9 @@ function manualText(record: EvidenceRecord, item: Data): string {
 		record.tool === "search_fault_knowledge"
 			? { title: item.source_file, locator: item.locator }
 			: object(item.source);
-	const citation = `依据《${text(source.title)}》${text(source.locator)}，${text(item.title ?? `${item.code}：${item.meaning}`)}。${item.context_complete === false ? "该条目未完整取得。" : ""}`;
+	const citation = `依据《${text(source.title)}》${text(source.locator)}，${text(item.title ?? `${item.code}：${item.meaning}`)}。${item.context_complete === false ? "该条目未完整取得。" : ""}${
+		item.applicability === "reference_only" ? "该条目来自其它设备系列，仅作参考，现场适用性未确认。" : ""
+	}`;
 	if (
 		record.tool !== "search_fault_knowledge" ||
 		!["motor_manual", "fault_simulation_plan"].includes(String(item.kind))
@@ -145,7 +214,7 @@ function label(metric: Data): string {
 }
 
 function formatWithUnit(metric: Data, value: number): string {
-	return `${format(value)}${metric.unit ? ` (${text(metric.unit)})` : " (单位未取得)"}`;
+	return `${format(value)}${metric.unit ? text(metric.unit) : "单位未取得"}`;
 }
 
 /** Only typed, evidence-backed facts reach this renderer; no model-authored prose or numbers are accepted. */
@@ -154,7 +223,8 @@ export function renderAnalysis(value: unknown, records: EvidenceRecord[]): strin
 		throw new ToolInputError("交付结构无效；仅提交format和claims，不接受自由正文、标题、数值或评分。");
 	const plan = value as AnalysisPlan;
 	const byId = new Map(records.map((record) => [record.id, record]));
-	const sections: { title: string; body: string }[] = [];
+	const sections: { title: string; body: string; scope?: Data }[] = [];
+	const narrativeSections: { kind: string; title: string; body: string }[] = [];
 	const scopes = new Map<string, Data>();
 	const limits = new Set<string>();
 	const citedManuals = new Set<string>();
@@ -164,7 +234,7 @@ export function renderAnalysis(value: unknown, records: EvidenceRecord[]): strin
 		citedManuals.add(citation);
 		return citation;
 	};
-	const manualLimit = "代码释义须核对现场型号、驱动对象与版本；涉及参数恢复或修改时，确认适用后按现场规程执行。";
+	const manualLimit = "手册释义须核对现场型号、驱动对象与版本；涉及参数修改时按现场规程执行。";
 	const unitFor = (table: unknown, metric: string) => {
 		const reading = records.find(
 			(record) => record.tool === "read_industrial_dashboard" && object(record.result).table === table,
@@ -175,15 +245,32 @@ export function renderAnalysis(value: unknown, records: EvidenceRecord[]): strin
 		);
 		return profile ? list(object(profile.result).measurements).find((item) => item.field === metric)?.unit : null;
 	};
-	const recordScope = (data: Data) => {
-		if (typeof data.table !== "string" || typeof data.from !== "string" || typeof data.to !== "string") return;
-		const key = JSON.stringify([data.table, Date.parse(data.from), Date.parse(data.to)]);
-		scopes.set(key, data);
-		if (scopes.size > 1) throw new ToolInputError("所选结论混用了设备或时间窗口；跨窗口比较请引用comparison证据。");
+	const scopeOf = (data: Data): Data | undefined =>
+		typeof data.table === "string" && typeof data.from === "string" && typeof data.to === "string" ? data : undefined;
+	const assertTable = (table: string) => {
+		for (const scope of scopes.values())
+			if (scope.table !== table) throw new ToolInputError("所选结论混用了设备；请分别引用同一设备的证据。");
 	};
+	const recordScope = (data: Data) => {
+		const scope = scopeOf(data);
+		if (!scope) return;
+		assertTable(String(scope.table));
+		scopes.set(JSON.stringify([scope.table, Date.parse(String(scope.from)), Date.parse(String(scope.to))]), scope);
+	};
+	const renderedSummaries = new Set<string>();
 	for (const claim of plan.claims) {
 		const record = byId.get(claim.evidenceId);
 		if (!record) throw new ToolInputError("证据不存在或不属于本轮请求。");
+		if (narrativeKinds.has(claim.kind)) {
+			if (!narrativeEvidenceTools.has(record.tool))
+				throw new ToolInputError("结论、过程、原因和建议必须引用本轮的数据或资料证据。");
+			narrativeSections.push({
+				kind: claim.kind,
+				title: narrativeLabels[claim.kind as keyof typeof narrativeLabels],
+				body: narrativeText(claim, records),
+			});
+			continue;
+		}
 		let data = object(record.result);
 		if (claim.kind === "stability_ranking")
 			throw new ToolInputError("尚无适用的统一比较方法及计算结果，不能交付稳定性排名；请改为各指标自身范围。");
@@ -195,9 +282,12 @@ export function renderAnalysis(value: unknown, records: EvidenceRecord[]): strin
 			const part =
 				claim.kind === "continuity"
 					? "quality"
-					: ["events", "event_pattern"].includes(claim.kind)
-						? "events"
-						: "statistics";
+					: claim.kind === "state"
+						? "state"
+						: ["events", "event_pattern"].includes(claim.kind)
+							? "events"
+							: "statistics";
+			if (part === "state" && !data.state) throw new ToolInputError("综合证据没有状态结果，不能交付状态结论。");
 			data = object(data[part]);
 		}
 		const allow = (...tools: string[]) => {
@@ -209,7 +299,7 @@ export function renderAnalysis(value: unknown, records: EvidenceRecord[]): strin
 		if (claim.kind === "metric_summary" || claim.kind === "trend" || claim.kind === "condition_count") {
 			allow("summarize_metrics");
 			recordScope(data);
-			limits.add("查询覆盖所选时段不代表连续采样；未做采样连续性检查时，不能判断时间上是否有断点。");
+			limits.add("查询覆盖时段不等于连续采样。");
 			if (claim.kind === "condition_count") {
 				const condition = object(data.condition);
 				const metric = selectedMetrics(data, { ...claim, metric: condition.metric as Claim["metric"] })[0];
@@ -217,7 +307,19 @@ export function renderAnalysis(value: unknown, records: EvidenceRecord[]): strin
 				body = `${label(metric)}严格${condition.operator === "gt" ? "大于" : "小于"}${format(condition.threshold)}的采样点为${format(condition.matched)}个，有效${format(condition.valid)}个、缺失${format(condition.missing)}个；采样点数不等于连续事件次数。`;
 				title = "条件统计";
 			} else {
-				const metrics = selectedMetrics(data, claim);
+				let metrics = selectedMetrics(data, claim);
+				if (claim.kind === "metric_summary") {
+					if (renderedSummaries.has(claim.evidenceId)) continue;
+					renderedSummaries.add(claim.evidenceId);
+					const related = plan.claims.filter(
+						(item) => item.kind === "metric_summary" && item.evidenceId === claim.evidenceId,
+					);
+					metrics = [
+						...new Map(
+							related.flatMap((item) => selectedMetrics(data, item)).map((item) => [item.metric, item]),
+						).values(),
+					];
+				}
 				title = claim.kind === "trend" ? "汇总趋势" : "关键指标";
 				if (claim.kind === "trend") {
 					const step = number(data.bucketSeconds);
@@ -238,10 +340,12 @@ export function renderAnalysis(value: unknown, records: EvidenceRecord[]): strin
 										.map((entry) => number(entry.mean)),
 								);
 							if (!means.length) return `${label(metric)}没有可用的汇总趋势。`;
-							return `${label(metric)}每${format(step / 60)}分钟汇总均值为${format(Math.min(...means))}～${format(Math.max(...means))} (${metric.unit ? text(metric.unit) : "单位未取得"})。`;
+							const coverage = data.trend && object(data.trend).sampled ? "预览所含时段的" : "";
+							return `${label(metric)}${coverage}每${format(step / 60)}分钟汇总均值为${format(Math.min(...means))}～${format(Math.max(...means))}${metric.unit ? text(metric.unit) : "，单位未取得"}。`;
 						})
 						.join(" ");
-					limits.add("汇总趋势只说明对应时间尺度，不能排除时段内的短时升温或跳变。");
+					limits.add("汇总趋势只说明对应时间尺度。");
+					if (data.trend && object(data.trend).sampled) limits.add("汇总趋势已降采样，只显示部分时段。");
 				} else if (plan.format === "report") {
 					const rows = metrics
 						.map(
@@ -257,7 +361,7 @@ export function renderAnalysis(value: unknown, records: EvidenceRecord[]): strin
 								`| ${label(metric)} | ${metric.mean === null ? "无有效值" : formatWithUnit(metric, metric.mean as number)} | ${metric.min === null ? "—" : formatWithUnit(metric, metric.min as number)} | ${metric.max === null ? "—" : formatWithUnit(metric, metric.max as number)} |`,
 						)
 						.join("\n");
-					body = `| 关键指标 | 均值 | 最小值 | 最大值 |\n| :--- | :--- | :--- | :--- |\n${rows}`;
+					body = `| 指标 | 均值 | 最小值 | 最大值 |\n| :--- | ---: | ---: | ---: |\n${rows}`;
 				} else
 					body = `${metrics
 						.map((metric) =>
@@ -267,10 +371,13 @@ export function renderAnalysis(value: unknown, records: EvidenceRecord[]): strin
 						)
 						.join("；")}。`;
 			}
-			if (
-				!records.some((entry) => entry.tool === "assess_device_state" || entry.tool === "analyze_threshold_events")
-			)
-				limits.add("以上描述观测值；未依据适用规则完成判断，不能据此认定设备正常、低载或空载。");
+			const hasState = records.some(
+				(entry) =>
+					entry.tool === "assess_device_state" ||
+					entry.tool === "analyze_threshold_events" ||
+					(entry.tool === "build_diagnostic_evidence" && Boolean((entry.result as Data).state)),
+			);
+			if (!hasState) limits.add("以上为观测值，未按规则判定设备状态。");
 		} else if (claim.kind === "events" || claim.kind === "event_pattern") {
 			allow("get_code_events");
 			recordScope(data);
@@ -321,9 +428,7 @@ export function renderAnalysis(value: unknown, records: EvidenceRecord[]): strin
 					);
 				body = `本次已查看的${events.length}条${text(claim.code)}事件，起点范围为北京时间${time(events[0].startedAt)}至${time(events.at(-1)!.startedAt)}，相邻起点间隔为${format(Math.min(...intervals))}～${format(Math.max(...intervals))}分钟；此规律仅限这些明细，不推广到未查看事件，也不据此推断配置原因。`;
 			}
-			limits.add(
-				"事件观察跨度不等于停机时长，零次故障事件不代表设备整体健康；未按报警时段对齐指标，不能判断报警期间指标是否偏离。",
-			);
+			limits.add("事件跨度不等于停机时长；零事件不等于设备健康。");
 		} else if (claim.kind === "manual") {
 			allow("search_fault_knowledge", "lookup_fault_code");
 			const items = list(record.tool === "search_fault_knowledge" ? data.results : data.matches).filter(
@@ -335,6 +440,8 @@ export function renderAnalysis(value: unknown, records: EvidenceRecord[]): strin
 				.filter(Boolean)
 				.join(" ");
 			limits.add(manualLimit);
+			if (items.some((item) => item.applicability === "reference_only"))
+				limits.add("参考手册与查询型号不属于同一设备系列，现场适用性未确认。");
 			title = "手册依据";
 		} else if (claim.kind === "continuity") {
 			allow("check_data_quality");
@@ -358,8 +465,8 @@ export function renderAnalysis(value: unknown, records: EvidenceRecord[]): strin
 			title = "时段对比";
 			const a = object(data.a),
 				b = object(data.b);
-			recordScope(b);
 			if (a.table !== b.table) throw new ToolInputError("不能混用设备进行窗口比较。");
+			assertTable(String(a.table));
 			const comparisons = list(data.comparisons).filter((entry) => !claim.metric || entry.metric === claim.metric);
 			if (!comparisons.length) throw new ToolInputError("比较证据不包含所选指标。");
 			const differences = comparisons
@@ -384,7 +491,14 @@ export function renderAnalysis(value: unknown, records: EvidenceRecord[]): strin
 				stopped: "停止",
 				fault: "故障",
 			};
-			body = `本次状态评估：${names[String(data.currentState)] ?? "尚无法确认"}。${data.ruleSource ? "判断依据已有状态规则及采样新鲜度，仅适用于本次评估。" : "尚无适用的状态规则。"}`;
+			const rule = data.ruleSource ? object(data.ruleSource) : null;
+			const observed =
+				data.observedState && data.observedState !== data.currentState
+					? `窗口内观测状态为${names[String(data.observedState)] ?? "尚无法确认"}；`
+					: "";
+			body = `本次状态评估：${names[String(data.currentState)] ?? "尚无法确认"}。${observed}${
+				rule ? `规则来源：${text(rule.source)}（${text(rule.version)}）。` : "尚无适用的状态规则。"
+			}${data.historicalWindowOnly ? "该窗口不是当前时段，不能作为当前状态。" : ""}`;
 		} else if (claim.kind === "reading") {
 			allow("read_industrial_dashboard", "read_industrial_rows");
 			title = "采样读数";
@@ -413,18 +527,63 @@ export function renderAnalysis(value: unknown, records: EvidenceRecord[]): strin
 						})
 						.join(" | ")} |\n| ${columns.map(() => "---").join(" | ")} |\n${rows
 						.slice(0, 50)
-						.map((row) => `| ${columns.map((key) => text(row[key] ?? "—")).join(" | ")} |`)
+						.map(
+							(row) =>
+								`| ${columns
+									.map((key) => {
+										const value = row[key];
+										if (typeof value === "number" && Number.isFinite(value)) {
+											// Epoch-millisecond timestamps render as Beijing time; floats keep 4 digits.
+											if (value >= 1000000000000) return time(new Date(value).toISOString());
+											return text(Number.isInteger(value) ? value : Number(value.toPrecision(4)));
+										}
+										return text(value ?? "—");
+									})
+									.join(" | ")} |`,
+						)
 						.join("\n")}`;
 			}
 		} else throw new ToolInputError("尚不支持该结论类型。");
-		if (body) sections.push({ title, body });
+		if (body) sections.push({ title, body, scope: scopeOf(data) });
 	}
-	const scope = [...scopes.values()][0];
-	const range = scope
-		? `${scoped(scope)}。${typeof scope.records === "number" ? `本次统计${format(scope.records)}条记录。` : ""}`
+	const scopeList = [...scopes.values()];
+	const singleScope = scopeList.length === 1 ? scopeList[0] : undefined;
+	const range = singleScope
+		? `${scoped(singleScope)}。${typeof singleScope.records === "number" ? `本次统计${format(singleScope.records)}条记录。` : ""}`
 		: "";
-	const content = sections
-		.map((section) => (plan.format === "report" ? `## ${section.title}\n\n${section.body}` : section.body))
+	if (narrativeSections.some((section) => section.kind === "hypothesis"))
+		limits.add("候选原因均为待验证假设，不能作为已确认故障。");
+	if (narrativeSections.some((section) => section.kind === "recommendation"))
+		limits.add("建议仅为核查动作，不代表已完成处置。");
+	const ordered = [
+		...narrativeSections.filter((section) => section.kind === "conclusion"),
+		...sections,
+		...narrativeSections.filter((section) => section.kind === "process"),
+		...narrativeSections.filter((section) => section.kind === "hypothesis" || section.kind === "recommendation"),
+	];
+	const merged: { title: string; text: string; list?: "ordered" | "unordered" }[] = [];
+	for (const section of ordered) {
+		const scope = "scope" in section ? section.scope : undefined;
+		const prefix = scopeList.length > 1 && scope ? `时间：${time(scope.from)}至${time(scope.to)}\n\n` : "";
+		const previous = merged.at(-1);
+		const kind = "kind" in section ? section.kind : undefined;
+		const list = kind === "recommendation" ? "ordered" : kind === "hypothesis" ? "unordered" : undefined;
+		if (previous && previous.title === section.title && previous.list === list && !prefix)
+			previous.text += `${list ? "\n" : "\n\n"}${section.body}`;
+		else merged.push({ title: section.title, text: `${prefix}${section.body}`, list });
+	}
+	const content = merged
+		.map((section) => {
+			const body = section.list
+				? section.text
+						.split("\n")
+						.map((item, index) => `${section.list === "ordered" ? `${index + 1}.` : "-"} ${item}`)
+						.join("\n")
+				: section.text;
+			const heading =
+				plan.format === "report" || (merged.length > 1 && section.title !== narrativeLabels.conclusion);
+			return heading ? `## ${section.title}\n\n${body}` : body;
+		})
 		.join("\n\n");
 	const attachments = records
 		.filter((record) => record.tool === "export_analysis_report")
@@ -448,7 +607,13 @@ export function renderAnalysis(value: unknown, records: EvidenceRecord[]): strin
 		)
 			attachments.push(`后台监测操作尚未启用，请核对后[确认监测操作](${result.approvalPath})。`);
 	}
-	const answer = `${plan.format === "report" ? "# 设备运行分析报告\n\n" : ""}${range ? `> 📌 **分析时段**：${range}\n\n` : ""}${content}${limits.size ? `\n\n> 💡 **限制说明**：${[...limits].join(" ")}` : ""}${attachments.length ? `\n\n${attachments.join(" · ")}` : ""}`;
+	const rangeLine = range ? `> 分析时段：${range}` : "";
+	const caution = [...limits].some((limit) => limit.includes("不属于同一设备系列")) ? "\u26a0\ufe0f " : "";
+	const limitLine = limits.size ? `> 限制说明：${caution}${[...limits].join(" ")}` : "";
+	const answer =
+		plan.format === "report"
+			? `# 设备运行分析报告\n\n${rangeLine ? `${rangeLine}\n\n` : ""}${content}${limitLine ? `\n\n${limitLine}` : ""}${attachments.length ? `\n\n${attachments.join(" · ")}` : ""}`
+			: `${content}${rangeLine ? `\n\n${rangeLine}` : ""}${limitLine ? `\n\n${limitLine}` : ""}${attachments.length ? `\n\n${attachments.join(" · ")}` : ""}`;
 	if (Buffer.byteLength(answer) > 40000) throw new ToolInputError("交付内容过长，请减少重复结论。");
 	return answer;
 }
@@ -465,7 +630,7 @@ export function createAnswerDelivery() {
 			return required;
 		},
 		get exhausted() {
-			return attempts >= 2;
+			return attempts >= 3;
 		},
 		start(tool: string) {
 			if (analysisTools.has(tool) || tool === "submit_analysis") required = true;
@@ -480,7 +645,7 @@ export function createAnswerDelivery() {
 		},
 		submit(plan: unknown) {
 			required = true;
-			if (++attempts > 2) throw new ToolInputError("交付校验未通过，已用完一次修正机会。");
+			if (++attempts > 3) throw new ToolInputError("交付校验未通过，已用完修正机会。");
 			const result = { text: renderAnalysis(plan, records), validated: true };
 			validated.set(result, result.text);
 			return result;

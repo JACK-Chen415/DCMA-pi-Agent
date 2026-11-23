@@ -56,6 +56,8 @@ export interface FaultKnowledgeRetrievalLog {
 	semantic_threshold: number;
 	/** 查询点名的设备系列与来源归属冲突、被排除或降权的来源；无冲突时缺省。 */
 	family_conflict?: string[];
+	/** 兼容系列没有可用条目时，是否回退到冲突来源作为参考手册。 */
+	family_fallback?: boolean;
 	fallback: string | null;
 }
 
@@ -328,15 +330,22 @@ export async function searchFaultKnowledge(options: SearchOptions = {}) {
 	}
 	const vectorById = new Map(vectorIndex?.items.map((item) => [item.id, item.vector]) ?? []);
 	const lexical = getLexicalContext(records, terms, requestedCode);
-	// 查询点名某驱动系列（如 G120）且未同时点名 S120 时，冲突来源整体不进入候选。
-	const candidates = records.filter(
-		(item) =>
-			(!terms.conflicts.length || !terms.conflicts.includes(item.source_id)) &&
-			(!requestedId || item.id === requestedId) &&
-			(!source || item.source_id === source) &&
-			(!kind || item.kind === kind) &&
-			(!requestedCode || item.codes.some((code) => normalize(code) === normalize(requestedCode))),
-	).flatMap((item) => {
+	const baseMatch = (item: FaultKnowledgeRecord) =>
+		(!requestedId || item.id === requestedId) &&
+		(!source || item.source_id === source) &&
+		(!kind || item.kind === kind) &&
+		(!requestedCode || item.codes.some((code) => normalize(code) === normalize(requestedCode)));
+	const familyMatch = (item: FaultKnowledgeRecord) => !terms.conflicts.includes(item.source_id);
+	// 查询点名某驱动系列（如 G120）且语料中存在该系列的可用条目时，冲突来源不进入候选。
+	// 若该系列在语料中没有任何条目（当前没有 G120 手册），则回退到冲突来源并标注 reference_only，
+	// 避免最常用的 G120 故障码查询直接得到空结果。
+	const compatible = records.filter((item) => baseMatch(item) && familyMatch(item));
+	const conflicting = terms.conflicts.length
+		? records.filter((item) => baseMatch(item) && !familyMatch(item))
+		: [];
+	const referenceOnly = Boolean(terms.conflicts.length) && !source && compatible.length === 0 && conflicting.length > 0;
+	const selected = referenceOnly ? conflicting : compatible;
+	const candidates = selected.flatMap((item) => {
 		const context = faultKnowledgeContext(records, item, requestedCode);
 		return context ? [{ item, context }] : [];
 	});
@@ -364,8 +373,12 @@ export async function searchFaultKnowledge(options: SearchOptions = {}) {
 		returned_count: ranked.length,
 		semantic_threshold: minimumSemanticScore,
 		...(terms.conflicts.length ? { family_conflict: terms.conflicts } : {}),
+		...(referenceOnly ? { family_fallback: true } : {}),
 		fallback: retrievalNotice ?? null,
 	};
+	const referenceNotice = referenceOnly
+		? "查询点名的设备系列在随附资料中没有对应手册；以下条目来自其它系列，仅作参考，现场适用性未确认。"
+		: null;
 	const response = {
 		query,
 		code: requestedCode || null,
@@ -374,6 +387,7 @@ export async function searchFaultKnowledge(options: SearchOptions = {}) {
 		kind: kind || null,
 		retrieval,
 		...(retrievalNotice ? { retrieval_notice: retrievalNotice } : {}),
+		...(referenceOnly ? { reference_only: true, applicability_notice: referenceNotice } : {}),
 		count: ranked.length,
 		truncated: false,
 		result_notice: null as string | null,
@@ -383,6 +397,7 @@ export async function searchFaultKnowledge(options: SearchOptions = {}) {
 			const sourceUrl = `/api/knowledge/context?id=${encodeURIComponent(item.id)}${requestedCode ? `&code=${encodeURIComponent(requestedCode)}` : ""}`;
 			return {
 				...context,
+				...(referenceOnly ? { applicability: "reference_only" as const, applicability_notice: referenceNotice } : {}),
 				citation_id: citationId,
 				rank: index + 1,
 				source_url: sourceUrl,
@@ -403,6 +418,142 @@ export async function searchFaultKnowledge(options: SearchOptions = {}) {
 		retrievalLog.returned_count = response.count;
 	}
 	return response;
+}
+
+/** Maps a device identity to the bundled source that actually owns that manual. */
+const bundledSourceAliases: readonly {
+	sourceId: string;
+	models: readonly string[];
+	manufacturers: readonly string[];
+	versions: readonly string[];
+}[] = [
+	{
+		sourceId: "s120-fault-manual",
+		models: ["s120", "s150", "sinamicss120", "sinamicss150"],
+		manufacturers: ["siemens", "西门子"],
+		versions: ["062020", "0602020", "202006"],
+	},
+	{ sourceId: "90l-4-manual", models: ["90l4"], manufacturers: [], versions: [] },
+	{ sourceId: "yfb801-2-manual", models: ["yfb8012"], manufacturers: [], versions: [] },
+];
+
+function compactIdentity(value: string): string {
+	return value.toLocaleLowerCase().replace(/[\s_./-]+/g, "");
+}
+
+function bundledSourceFor(manufacturer: string, model: string, version: string): string | undefined {
+	const compactModel = compactIdentity(model);
+	const compactManufacturer = compactIdentity(manufacturer);
+	const compactVersion = compactIdentity(version);
+	return bundledSourceAliases.find(
+		(source) =>
+			source.models.some((name) => compactModel.includes(name)) &&
+			(source.manufacturers.length === 0 ||
+				!compactManufacturer ||
+				source.manufacturers.some((name) => compactManufacturer.includes(name))) &&
+			(source.versions.length === 0 ||
+				!compactVersion ||
+				source.versions.some((name) => compactVersion.includes(name) || name.includes(compactVersion))),
+	)?.sourceId;
+}
+
+export interface BundledFaultMatch {
+	id: string;
+	code: string;
+	kind: string;
+	title: string;
+	meaning: string;
+	text: string;
+	source: { title: string; locator: string; revision: string };
+	context_complete?: boolean;
+	sourceId: string;
+	applicability: "reference_only" | "series_reference";
+	verified: false;
+	sourceStatus: "bundled_reference";
+}
+
+export interface BundledFaultLookupInput {
+	manufacturer: string;
+	model: string;
+	version: string;
+	code: string;
+	kind: "fault" | "alarm" | "status" | "control";
+}
+
+/**
+ * Exact code lookup over the bundled RAG corpus. The local knowledge.json remains authoritative
+ * when the operator imported their own manual; this covers the shipped S120 / motor manuals.
+ */
+export async function lookupBundledFaultCode(input: BundledFaultLookupInput) {
+	const code = input.code.trim().toUpperCase();
+	const prefix = input.kind === "fault" ? "F" : input.kind === "alarm" ? "A" : "";
+	if (!prefix) {
+		return {
+			configured: true,
+			found: false,
+			total: 0,
+			hasMore: false,
+			matches: [] as BundledFaultMatch[],
+			verified: false as const,
+			sourceKind: "bundled" as const,
+			searchedSource: null,
+			applicability_notice: null as string | null,
+			notice: "随附手册只提供故障码和报警码定义，不提供状态字或控制字编码。",
+		};
+	}
+	if (!code.startsWith(prefix)) {
+		return {
+			configured: true,
+			found: false,
+			total: 0,
+			hasMore: false,
+			matches: [] as BundledFaultMatch[],
+			verified: false as const,
+			sourceKind: "bundled" as const,
+			searchedSource: null,
+			applicability_notice: null as string | null,
+			notice: `代码类型与${input.kind === "fault" ? "故障" : "报警"}不一致，未在随附手册中匹配。`,
+		};
+	}
+	const sourceId = bundledSourceFor(input.manufacturer, input.model, input.version);
+	let search = await searchFaultKnowledge({ code, source: sourceId, limit: 10 });
+	let referenceOnly = false;
+	if (!search.results.length && sourceId) {
+		search = await searchFaultKnowledge({ code, limit: 10 });
+		referenceOnly = search.results.length > 0;
+	}
+	if (!sourceId && search.results.length > 0 && /^(g120|g130|g150|s120|s150)$/i.test(compactIdentity(input.model))) {
+		referenceOnly = true;
+	}
+	const notice = referenceOnly
+		? "查询型号没有对应的随附手册；以下释义来自其它系列手册，只能作为参考，现场适用性未确认。"
+		: null;
+	const matches: BundledFaultMatch[] = search.results.map((item) => ({
+		id: item.id,
+		code,
+		kind: input.kind,
+		title: item.title,
+		meaning: item.title,
+		text: item.text,
+		source: { title: item.source_file, locator: item.locator, revision: "" },
+		context_complete: (item as { context_complete?: boolean }).context_complete,
+		sourceId: item.source_id,
+		applicability: referenceOnly ? ("reference_only" as const) : ("series_reference" as const),
+		verified: false as const,
+		sourceStatus: "bundled_reference" as const,
+	}));
+	return {
+		configured: true,
+		found: matches.length > 0,
+		total: matches.length,
+		hasMore: search.count > matches.length,
+		matches,
+		verified: false as const,
+		sourceKind: "bundled" as const,
+		searchedSource: sourceId ?? null,
+		applicability_notice: notice,
+		...(referenceOnly ? { applicability: "reference_only" as const } : {}),
+	};
 }
 
 export async function listFaultKnowledgeSources(): Promise<{ sources: FaultKnowledgeSource[]; records: number }> {
