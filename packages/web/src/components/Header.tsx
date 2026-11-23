@@ -1,25 +1,25 @@
-import { Activity, ListChecks, PanelLeft, Plus, Settings, SlidersHorizontal } from "lucide-react";
+import { Activity, ListChecks, PanelLeft, Settings, SlidersHorizontal } from "lucide-react";
 import type { BackendStatus } from "../types.ts";
 
 export function Header({
 	onOpenSettings,
 	onToggleHistory,
 	onOpenPanel,
-	onNewChat,
 	onSwitchDevice,
 	onRealtime,
 	sidebarOpen,
 	hasAnalysis,
+	hasDeviceAlert,
 	status,
 }: {
 	onOpenSettings: () => void;
 	onToggleHistory: () => void;
 	onOpenPanel: () => void;
-	onNewChat: () => void;
 	onSwitchDevice: () => void;
 	onRealtime: () => void;
 	sidebarOpen: boolean;
 	hasAnalysis: boolean;
+	hasDeviceAlert: boolean;
 	status: BackendStatus;
 }) {
 	return (
@@ -34,10 +34,6 @@ export function Header({
 					onClick={onToggleHistory}
 				>
 					<PanelLeft size={20} />
-				</button>
-				<button type="button" className="header-new" onClick={onNewChat} aria-label="新对话" title="新对话">
-					<Plus size={17} />
-					<span>新对话</span>
 				</button>
 				<img src="/assets/sztu.jpg" alt="深圳技术大学校徽" />
 				<div className="brand-copy">
@@ -54,11 +50,12 @@ export function Header({
 					type="button"
 					className="header-action"
 					onClick={onSwitchDevice}
-					aria-label="切换设备"
-					title="切换设备"
+					aria-label={hasDeviceAlert ? "切换设备，有未查看的设备异常" : "切换设备"}
+					title={hasDeviceAlert ? "切换设备 · 有未查看的设备异常" : "切换设备"}
 				>
 					<SlidersHorizontal size={17} />
 					<span>切换设备</span>
+					{hasDeviceAlert && <span className="device-alert-dot" aria-hidden="true" />}
 				</button>
 				<button
 					type="button"

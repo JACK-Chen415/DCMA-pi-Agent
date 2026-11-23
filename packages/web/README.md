@@ -109,16 +109,18 @@ node --test packages/web/test/knowledge.test.ts
 EMBEDDING_BASE_URL=https://api.siliconflow.cn/v1
 EMBEDDING_API_KEY=your-embedding-api-key
 EMBEDDING_MODEL=BAAI/bge-m3
+# 可选：把生成的本机索引移出受版本管理的语料目录，路径相对 packages/web/knowledge/data
+# EMBEDDING_INDEX_PATH=../../.dcma-runtime/knowledge/vectors.json
 ```
 
-资料更新后，在仓库根目录执行：
+资料更新或更换嵌入模型后，在仓库根目录执行：
 
 ```bash
 npm --prefix packages/web run knowledge:ingest
 npm --prefix packages/web run knowledge:build
 ```
 
-`knowledge:build` 会重新调用嵌入服务并原子替换 `packages/web/knowledge/data/vectors.json`；密钥不会写入索引。可通过 `GET /api/knowledge/health` 确认 `records`、`vectors.ready` 和实际 `retrieval` 状态。原有 `.dcma-runtime/knowledge.json` 仍用于用户自行导入的自定义资料，二者来源和用途分开记录。
+`knowledge:build` 会重新调用嵌入服务并原子替换索引文件：默认是 `packages/web/knowledge/data/vectors.json`；配置了 `EMBEDDING_INDEX_PATH` 时写入该路径（相对 `packages/web/knowledge/data` 解析），例如 `../../.dcma-runtime/knowledge/vectors.json` 会落在被 Git 忽略的 `packages/web/.dcma-runtime/knowledge/` 下。更换模型后必须重建，不能混用其他模型生成的向量；密钥不会写入索引。可通过 `GET /api/knowledge/health` 确认 `records`、`embedding.model`、`vectors.ready`、`vectors.index` 和实际 `retrieval` 状态。原有 `.dcma-runtime/knowledge.json` 仍用于用户自行导入的自定义资料，二者来源和用途分开记录。
 
 生产预览前需分别执行 `npm run web:build` 和 `npm --prefix dashboard run build`，生成两套静态资源。两套页面在生产模式下仍由同一服务提供；开发验证不代表生产构建已验证。
 
@@ -140,7 +142,7 @@ npm --prefix packages/web run knowledge:build
 - 完成回答后可手动朗读、停止朗读；开始新的朗读或语音输入会停止旧朗读。使用浏览器语音能力，不新增模型凭据或语音SDK；浏览器支持、语音服务网络与实际麦克风效果需在目标设备确认。
 - 生成时显示当前查询、统计、资料检索或绘图步骤及等待时间。步骤和成功证据引用随会话保存，刷新后随同一个生成任务恢复。工具执行预算不再包含模型等待；连续120秒无进展或总执行5分钟会中止并保留部分结果，原模型超时的现场原因仍需真实请求时序验证。
 - “处理步骤与查询证据”可查看来源、北京时间范围、样本数量、统计、阈值点数、资料出处和原文，并展开精确查询条件及完整结果。证据是本机固定快照，重启后可读，旧会话不自动补查。
-- “下载完整报告”生成独立HTML文件，包含问题、Markdown排版的回答、内嵌SVG图表、完整图表数据及查询／资料证据，离线打开无需本机服务；可通过浏览器打印保存PDF。图表使用完整快照视野，缺失或归档的快照会阻止伪完整导出。
+- “下载完整报告”悬停或点击后展开四项：`.md`、`PDF`、`HTML`、`预览`。HTML 为独立网页报告，包含问题、回答正文、内嵌SVG图表、完整图表数据及查询／资料证据，离线打开无需本机服务；PDF 由本机 Chrome 或 Edge 无头模式按同一 HTML 渲染后经“另存为”导出，缺失浏览器时提示改用 HTML 打印；`.md` 参考 HTML 结构输出标题、问题、结论、图表数据表和证据条目；`预览` 直接在页面内 iframe 展示 HTML 报告。Markdown 表格（含缺少分隔行或全角竖线的表格）会先修正为真实表格再渲染，HTML、预览与 PDF 均为带表头样式的完整表格。图表使用完整快照视野，缺失或归档的快照会阻止伪完整导出。
 - “下载回答文字”继续提供纯Markdown；Agent已有的Markdown／JSON证据报告工具及图表PNG／SVG／CSV下载保持独立。完整HTML不自动合并同一会话的其他轮次。
 - `summarize_metrics`支持严格大于或小于阈值的采样点计数，区分等于阈值、未命中和缺失；只查点数时不要求连续事件规则。
 
@@ -155,6 +157,8 @@ node --import ./packages/coding-agent/src/experimental/source-resolver.ts --test
 - CSV / JSONL / LOG 文件导入，逐行验证时间和数值；真实 CSV 下载和 Markdown 分析报告下载。
 - 数据库侧栏显示电机温度、电压、电流、转速近期趋势；原离线遥测图表和频谱计算模块保留。
 - 响应式布局，小屏可通过顶部按钮打开会话与设备面板；弹窗支持 Escape 和键盘焦点。
+- 大屏（视口 ≥2000px）消息列默认 1088px，输入框与欢迎页宽度不变；输入框和免责提示之间有一条居中的细条，悬停滚动滚轮或聚焦后按 ←/→ 每次调节 48px，宽度只保底 800px、不设固定上限（最宽到当前聊天区可用宽度，随会话侧栏和分析栏的展开收起变化），双击恢复默认，宽度保存在当前浏览器（`dcma-column-width`）；小屏不显示该细条，消息列保持 800px。
+- 任一设备故障码或报警码非零（状态评估有效）时，“切换设备”按钮右上角显示红点；打开设备选择面板后红点消除，出现新的异常码或新设备异常时再次提示；确认记录保存在当前浏览器（`dcma-device-alert-seen`），异常全部清零后自动重置。
 - 仅提供 Agent 对话，支持 Pi SDK 流式回复、停止生成和错误显示。每次调用带入最近 20 条有效消息；关闭数据库优先查询时，提供当前数据集最新最多200个原始采样点，分析由模型完成。
 
 ## 数据导入
@@ -175,7 +179,11 @@ timestamp,temperature,vibration,current,speed
 
 DeepSeek 官方接口已配置在 `models.json`：`https://api.deepseek.com`，模型 `deepseek-flash`（DeepSeek V4.1 Flash）。复制 `.env.example` 为本目录的 `.env` 并填写 `DEEPSEEK_API_KEY`，然后重启服务。`.env` 已被 Git 忽略，勿将密钥写入前端或提交到仓库。服务器只读取本项目的模型配置；Pi 的现有授权仍可使用。
 
-网页设置选择“DeepSeek V4.1 Flash”，保存后回复由真实模型生成。随项目提供的该模型配置中，`maxTokens`为16384；其他模型的输出上限以各自配置为准。费用估算使用配置价格，实际扣费以提供商账单为准。
+`models.json` 也可配置校内实验室的 OpenAI 兼容网关（当前为 `lab` 提供方：`http://10.108.13.250:18081/v1`，密钥 `LAB_API_KEY`，校园网或 VPN 下可用）。带 `discoverModels: true` 的提供方在服务启动、保存或读取模型时请求其 `GET /models`，网关新增模型无需改配置；读取失败时回退到配置文件中的静态模型。
+
+网页设置内的“模型 API 配置”面板可直接新增、编辑、删除模型 API，并单独读取每个 API 的可用模型；列表只显示 API 名称、内置/自定义状态与模型，接口地址、密钥等详细内容在“编辑”窗口修改，点击窗口外区域即取消编辑。保存后立即生效，不需要改文件或重启服务。界面修改保存在本机后端的 `packages/web/.dcma-runtime/model-providers.json`（已被 Git 忽略，权限 600），其他浏览器打开同一页面会看到同一组配置；密钥只在后端保存，接口响应仅返回掩码。内置提供方（`lab`、`deepseek`）可被界面覆盖，保存内容与内置默认一致时不记为覆盖，删除覆盖即恢复 `models.json` 的默认值。对应接口：`GET /api/model-config`（可带 `?refresh=all` 或 `?refresh=<provider>` 强制重新读取）、`POST /api/model-config`、`DELETE /api/model-config?provider=<id>`，写操作需要同源请求与 `X-DCMA-Client: web` 请求头。`GET /api/health` 的 `providers` 字段记录每个提供方的来源（`gateway` 或 `configured`）、模型列表与失败原因。
+
+模型选择位于聊天输入框底部工具栏（左起为附件、语音，右侧留空后是模型下拉与发送按钮），下拉只显示模型名（如 DeepSeek Flash、DeepSeek V4.1 Flash），不显示所属 API；顶栏不再显示模型下拉和新对话按钮，新建会话入口保留在会话历史侧栏。切换后回复由所选模型生成。随项目提供的 DeepSeek 模型配置中，`maxTokens`为16384；实验室网关模型的上限按网关返回的 `max_output_tokens`（32768）配置。费用估算使用配置价格，实际扣费以提供商账单为准。
 
 模型推理档位默认 `medium`（`DCMA_THINKING_LEVEL` 可覆盖）；2026-11-15 对照显示 `low` 会把分析收敛成一行模板交付。运行时目录默认 `.dcma-runtime`，可用 `DCMA_RUNTIME_DIR` 指到其他目录做隔离评测。在项目根目录运行 `./pi-test.sh`，通过 `/login` 完成 Pi 模型授权，或者在启动服务的终端配置对应提供商的环境变量。授权后在网页设置中刷新模型列表，选择实际模型，保存并应用。
 

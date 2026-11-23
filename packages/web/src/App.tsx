@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cancelChat, getBackendStatus, streamChat } from "./api.ts";
+import {
+	COLUMN_WIDTH_DEFAULT_NARROW,
+	COLUMN_WIDTH_DEFAULT_WIDE,
+	COLUMN_WIDTH_MIN,
+	columnWidthStorageKey,
+	parseStoredColumnWidth,
+	wideViewportQuery,
+} from "./column-width.ts";
 import { ChatInput } from "./components/ChatInput";
 import { ChatView } from "./components/ChatView";
 import { DeviceModal } from "./components/DeviceModal";
@@ -12,6 +20,12 @@ import { TelemetryModal } from "./components/TelemetryModal";
 import { WelcomeView } from "./components/WelcomeView";
 import { createConversationStorage } from "./conversation-storage.ts";
 import { dashboardTables, databaseDataset, databaseDevice, useDashboard } from "./dashboard-data.ts";
+import {
+	collectDeviceAlerts,
+	deviceAlertSignature,
+	deviceAlertStorageKey,
+	parseSeenAlertSignature,
+} from "./device-alerts.ts";
 import { downloadText, exportStatusEvent } from "./download.ts";
 import { createMessageId } from "./message-id.ts";
 import { resolveModel } from "./model-selection.ts";
@@ -24,6 +38,25 @@ export function App() {
 	const [backend, setBackend] = useState<BackendStatus>({ connected: false, models: [], message: "正在连接本地服务" });
 	const [modal, setModal] = useState<"device" | "telemetry" | "settings" | "import" | null>(null);
 	const [sidebarOpen, setSidebarOpen] = useState(() => window.matchMedia("(min-width: 1024px)").matches);
+	const [columnWidth, setColumnWidth] = useState<number | null>(() => {
+		try {
+			return parseStoredColumnWidth(localStorage.getItem(columnWidthStorageKey));
+		} catch {
+			// Private windows can reject storage reads; the default width still works.
+			return null;
+		}
+	});
+	const [wideViewport, setWideViewport] = useState(() => window.matchMedia(wideViewportQuery).matches);
+	const [chatMainWidth, setChatMainWidth] = useState(0);
+	const chatMainRef = useRef<HTMLElement>(null);
+	const [seenAlertSignature, setSeenAlertSignature] = useState(() => {
+		try {
+			return parseSeenAlertSignature(localStorage.getItem(deviceAlertStorageKey));
+		} catch {
+			// Private windows can reject storage reads; the dot still shows.
+			return "";
+		}
+	});
 	const [panelOpen, setPanelOpen] = useState(false);
 	const [analysisSelection, setAnalysisSelection] = useState<{ conversationId: string; messageId: string } | null>(
 		null,
@@ -45,6 +78,9 @@ export function App() {
 	const historyStorage = useRef<ReturnType<typeof createConversationStorage> | null>(null);
 	const table = dashboardTables.find((item) => item === workspace.deviceId) ?? dashboardTables[0];
 	const live = useDashboard(table, 100);
+	const deviceAlerts = collectDeviceAlerts(live.data?.sources);
+	const alertSignature = deviceAlertSignature(deviceAlerts);
+	const hasDeviceAlert = alertSignature !== "" && alertSignature !== seenAlertSignature;
 	const devices = dashboardTables.map((name) =>
 		databaseDevice(
 			name,
@@ -70,6 +106,58 @@ export function App() {
 	const isStreaming = generatingConversations.some((item) => item.id === workspace.activeId);
 	const settings = workspace.settings;
 	const modelId = resolveModel(settings.model, backend.models);
+	// The ceiling is the live chat area width, so the column has no fixed maximum.
+	const chatContentWidth = chatMainWidth > 0 ? Math.max(COLUMN_WIDTH_MIN, Math.floor(chatMainWidth - 48)) : 0;
+	const requestedColumnWidth = columnWidth ?? COLUMN_WIDTH_DEFAULT_WIDE;
+	const effectiveColumnWidth = wideViewport
+		? chatContentWidth > 0
+			? Math.min(requestedColumnWidth, chatContentWidth)
+			: requestedColumnWidth
+		: COLUMN_WIDTH_DEFAULT_NARROW;
+	const columnWidthLimit = wideViewport
+		? chatContentWidth > 0
+			? chatContentWidth
+			: requestedColumnWidth
+		: COLUMN_WIDTH_DEFAULT_NARROW;
+	const changeColumnWidth = (next: number) => {
+		if (next > columnWidthLimit || next === effectiveColumnWidth) return;
+		setColumnWidth(next);
+	};
+	useEffect(() => {
+		const element = chatMainRef.current;
+		if (!element) return;
+		const observer = new ResizeObserver((entries) => {
+			setChatMainWidth(Math.round(entries[0]?.contentRect.width ?? 0));
+		});
+		observer.observe(element);
+		return () => observer.disconnect();
+	}, []);
+	useEffect(() => {
+		const media = window.matchMedia(wideViewportQuery);
+		const update = () => setWideViewport(media.matches);
+		media.addEventListener("change", update);
+		return () => media.removeEventListener("change", update);
+	}, []);
+	useEffect(() => {
+		try {
+			if (columnWidth === null) localStorage.removeItem(columnWidthStorageKey);
+			else localStorage.setItem(columnWidthStorageKey, String(columnWidth));
+		} catch {
+			// The width still applies for this session when storage is unavailable.
+		}
+	}, [columnWidth]);
+	useEffect(() => {
+		try {
+			if (seenAlertSignature === "") localStorage.removeItem(deviceAlertStorageKey);
+			else localStorage.setItem(deviceAlertStorageKey, seenAlertSignature);
+		} catch {
+			// The acknowledgement only lasts for this session when storage is unavailable.
+		}
+	}, [seenAlertSignature]);
+	useEffect(() => {
+		// Once every anomaly clears, drop the acknowledgement so the next occurrence alerts again.
+		if (alertSignature === "" && seenAlertSignature !== "") setSeenAlertSignature("");
+	}, [alertSignature, seenAlertSignature]);
 	useEffect(() => {
 		const media = window.matchMedia("(min-width: 1024px)");
 		const resize = () => {
@@ -229,6 +317,13 @@ export function App() {
 		return () => clearTimeout(timer);
 	}, [notice]);
 	useEffect(() => {
+		if (!backend.models.length) return;
+		if (backend.models.some((model) => model.id === settings.model)) return;
+		const fallback = backend.models[0]?.id;
+		if (!fallback) return;
+		setWorkspace((state) => ({ ...state, settings: { ...state.settings, model: fallback } }));
+	}, [backend.models, settings.model]);
+	useEffect(() => {
 		const exported = (event: Event) => {
 			if (event instanceof CustomEvent && typeof event.detail === "string") setNotice(event.detail);
 		};
@@ -253,7 +348,7 @@ export function App() {
 	};
 	const refreshModels = async () => {
 		try {
-			setBackend(await getBackendStatus(AbortSignal.timeout(15000), true));
+			setBackend(await getBackendStatus(AbortSignal.timeout(30000), true));
 			setNotice("模型状态已刷新");
 		} catch {
 			setNotice("无法刷新模型列表，请检查后端服务。");
@@ -468,11 +563,14 @@ export function App() {
 					setPanelOpen(true);
 					if (!window.matchMedia("(min-width: 1024px)").matches) setSidebarOpen(false);
 				}}
-				onNewChat={newChat}
-				onSwitchDevice={() => setModal("device")}
+				onSwitchDevice={() => {
+					setSeenAlertSignature(alertSignature);
+					setModal("device");
+				}}
 				onRealtime={openRealtime}
 				sidebarOpen={sidebarOpen}
 				hasAnalysis={!!analysisMessage}
+				hasDeviceAlert={hasDeviceAlert}
 				status={backend}
 			/>
 			<div className="app-body">
@@ -513,7 +611,7 @@ export function App() {
 					open={sidebarOpen}
 					onClose={() => setSidebarOpen(false)}
 				/>
-				<main className="chat-main">
+				<main className="chat-main" ref={chatMainRef}>
 					<div className="device-context">
 						<span>
 							{device.name} · {dataset.source}
@@ -541,6 +639,7 @@ export function App() {
 						<ChatView
 							messages={conversation.messages}
 							isStreaming={isStreaming}
+							columnWidth={effectiveColumnWidth}
 							onViewAnalysis={(messageId) => {
 								setAnalysisSelection({ conversationId: conversation.id, messageId });
 								setPanelOpen(true);
@@ -571,6 +670,18 @@ export function App() {
 						disabled={isStreaming}
 						onStop={isStreaming ? () => stop() : undefined}
 						onImport={openImport}
+						model={settings.model}
+						models={backend.models}
+						onSelectModel={(id) => {
+							if (!id || id === settings.model) return;
+							setWorkspace((state) => ({ ...state, settings: { ...state.settings, model: id } }));
+							setNotice(`已切换模型：${backend.models.find((item) => item.id === id)?.name ?? id}`);
+						}}
+						columnWidth={effectiveColumnWidth}
+						columnMaxWidth={columnWidthLimit}
+						showColumnResizer={wideViewport}
+						onColumnWidthChange={changeColumnWidth}
+						onColumnWidthReset={() => setColumnWidth(null)}
 					/>
 				</main>
 				{analysisMessage && (
@@ -604,9 +715,7 @@ export function App() {
 					backend={backend}
 					onClose={() => setModal(null)}
 					onSave={saveSettings}
-					onRefresh={() => {
-						void refreshModels();
-					}}
+					onRefresh={refreshModels}
 				/>
 			)}
 			{modal === "import" && (

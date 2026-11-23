@@ -9,7 +9,7 @@ export function Modal({
 }: {
 	title: string;
 	subtitle?: string;
-	size?: "default" | "compact";
+	size?: "default" | "compact" | "wide";
 	onClose: () => void;
 	children: ReactNode;
 }) {
@@ -19,6 +19,7 @@ export function Modal({
 		dialog?.showModal();
 		return () => dialog?.close();
 	}, []);
+	const sizeClass = size === "compact" ? " dialog-shell--compact" : size === "wide" ? " dialog-shell--wide" : "";
 	return (
 		<dialog
 			ref={ref}
@@ -27,7 +28,7 @@ export function Modal({
 				onClose();
 			}}
 			aria-label={title}
-			className={`dialog-shell${size === "compact" ? " dialog-shell--compact" : ""} rounded-3xl p-5 sm:p-6 bg-white text-slate-800 shadow-2xl`}
+			className={`dialog-shell${sizeClass} rounded-3xl p-5 sm:p-6 bg-white text-slate-800 shadow-2xl`}
 		>
 			<div className="dialog-heading flex items-start justify-between gap-4 border-b border-slate-100 pb-4">
 				<div>

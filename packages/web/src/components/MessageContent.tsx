@@ -2,6 +2,7 @@ import { type ReactNode, useRef, useState } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { downloadSavedFile } from "../download.ts";
+import { repairMarkdownTables } from "../markdown-tables.ts";
 import { remarkKnowledgeLinks } from "../remark-knowledge-links.ts";
 import { remarkLimitations } from "../remark-limitations.ts";
 import { remarkSecondPrecision } from "../time-display.ts";
@@ -71,7 +72,7 @@ export function MessageContent({ content }: { content: string }) {
 				components={components}
 				skipHtml
 			>
-				{content}
+				{repairMarkdownTables(content)}
 			</Markdown>
 		</div>
 	);

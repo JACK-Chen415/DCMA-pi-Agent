@@ -17,7 +17,15 @@ export async function chooseExportPath(
 		const output = await new Promise<string>((resolve, reject) => {
 			const child = spawn(
 				"powershell.exe",
-				["-NoProfile", "-STA", "-File", fileURLToPath(new URL("./save-dialog.ps1", import.meta.url))],
+				[
+					"-NoProfile",
+					// Machines with an AllSigned/RemoteSigned policy refuse unsigned local scripts, which made every export fail.
+					"-ExecutionPolicy",
+					"Bypass",
+					"-STA",
+					"-File",
+					fileURLToPath(new URL("./save-dialog.ps1", import.meta.url)),
+				],
 				{
 					windowsHide: true,
 					signal,

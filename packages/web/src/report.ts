@@ -6,10 +6,19 @@ import { type ChartArtifact, validateChartArtifact } from "../chart-contracts.ts
 import { type EvidenceBundle, toolLabels } from "../interaction-contracts.ts";
 import { renderChartSvg } from "./chart-render.ts";
 import { evidenceSummary, loadEvidence } from "./evidence.ts";
+import { repairMarkdownTables } from "./markdown-tables.ts";
 import { remarkKnowledgeLinks } from "./remark-knowledge-links.ts";
 import { remarkLimitations } from "./remark-limitations.ts";
 import { remarkSecondPrecision, timeToSeconds } from "./time-display.ts";
 import type { ChatMessage } from "./types.ts";
+
+const chartKindLabels: Record<ChartArtifact["kind"], string> = {
+	line: "折线图",
+	scatter: "散点图",
+	bar: "柱状图",
+	histogram: "直方图",
+};
+const markdownRowLimit = 200;
 
 export function messageReport(message: ChatMessage): string {
 	return `# DCMA 对话记录\n\n生成时间：${timeToSeconds(message.timestamp)}\n分析引擎：${message.engine ?? "未指定"}\n\n${message.content}\n`;
@@ -20,6 +29,64 @@ function escapeHtml(text: string): string {
 		/[&<>"']/g,
 		(character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!,
 	);
+}
+function cellText(value: string): string {
+	return value.replace(/\|/gu, "\\|").replace(/\r?\n/gu, " ");
+}
+function chartMarkdown(chart: ChartArtifact): string {
+	const columns = chart.columns.map((column) => (column.unit ? `${column.label}（${column.unit}）` : column.label));
+	const rows = chart.displayRows.slice(0, markdownRowLimit).map((row) =>
+		row.map((value, index) => {
+			if (value === null) return "—";
+			const role = chart.columns[index]?.role;
+			return cellText(role === "time" ? timeToSeconds(String(value)) : String(value));
+		}),
+	);
+	const table = [
+		`| ${columns.map(cellText).join(" | ")} |`,
+		`| ${columns.map(() => "---").join(" | ")} |`,
+		...rows.map((row) => `| ${row.join(" | ")} |`),
+	].join("\n");
+	const facts: string[] = [
+		`类型：${chartKindLabels[chart.kind]}`,
+		`来源采样：${chart.sourceRecords.toLocaleString("zh-CN")} 条`,
+		`图表数据：${chart.displayRows.length.toLocaleString("zh-CN")} 行${chart.displayRows.length > markdownRowLimit ? `（Markdown 仅列出前 ${markdownRowLimit} 行，完整视图见 HTML 报告）` : ""}`,
+	];
+	const range = chart.sources
+		.map((source) => `${timeToSeconds(source.from)} ～ ${timeToSeconds(source.to)}（${source.table}）`)
+		.join("；");
+	if (range) facts.push(`时间范围：${range}`);
+	if (chart.aggregation) facts.push(`聚合方式：${chart.aggregation}`);
+	for (const note of chart.notes) facts.push(`说明：${note}`);
+	return `### ${timeToSeconds(chart.title)}\n\n${facts.map((fact) => `- ${fact}`).join("\n")}\n\n${table}`;
+}
+export function reportMarkdown(
+	message: ChatMessage,
+	charts: ChartArtifact[],
+	evidence: EvidenceBundle | null,
+	question = "",
+): string {
+	const stamp = new Date(message.timestamp).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false });
+	const sections: string[] = ["# DCMA 工业数据分析报告", ""];
+	sections.push(`- 分析时间：${stamp}（北京时间）`, `- 分析引擎：${message.engine ?? "未指定"}`, "");
+	if (question.trim()) sections.push("## 分析问题", "", timeToSeconds(question.trim()), "");
+	sections.push("## 分析结论", "", repairMarkdownTables(message.content).trim(), "");
+	if (charts.length) sections.push("## 图表", "", ...charts.map((chart) => `${chartMarkdown(chart)}\n`));
+	sections.push("## 查询与资料证据", "");
+	if (evidence?.records.length) {
+		for (const record of evidence.records) {
+			sections.push(`### ${toolLabels[record.tool] ?? record.tool}`, "");
+			sections.push(
+				`- 记录时间：${new Date(record.createdAt).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}（北京时间）`,
+			);
+			for (const line of evidenceSummary(record)) sections.push(`- ${line}`);
+			sections.push("");
+		}
+	} else sections.push("本条消息没有已保存的查询证据。此说明不能代替数据核验。", "");
+	sections.push(
+		"> 本报告保存本次回答与查询时的固定快照，不随实时数据更新。图表数据为快照视图；数据范围、截断、缺失及资料适用条件以证据为准。模型建议不等于已确认的故障根因。",
+	);
+	return `${sections.join("\n").trimEnd()}\n`;
 }
 export function analysisReportHtml(
 	message: ChatMessage,
@@ -35,7 +102,7 @@ export function analysisReportHtml(
 				skipHtml: true,
 				components: { img: () => null },
 			},
-			message.content,
+			repairMarkdownTables(message.content),
 		),
 	);
 	const stamp = new Date(message.timestamp).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false });
@@ -56,9 +123,14 @@ export function analysisReportHtml(
 						.join("")}</section>`,
 			)
 			.join("") ?? "<p>本条消息没有已保存的查询证据。此说明不能代替数据核验。</p>";
-	return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'"><title>DCMA 分析报告</title><style>body{font:15px/1.8 system-ui,"Microsoft YaHei",sans-serif;color:#1e293b;max-width:1050px;margin:40px auto;padding:0 24px}h1{font-size:28px;color:#0f172a}h2{margin-top:32px;font-size:21px}h3{font-size:17px}header{border-bottom:3px solid #2563eb;padding-bottom:18px}p{white-space:pre-wrap;overflow-wrap:anywhere}a{color:#2563eb;overflow-wrap:anywhere}table{border-collapse:collapse;max-width:100%;display:block;overflow:auto}td,th{border:1px solid #cbd5e1;padding:8px 12px;text-align:left}th{background:#f1f5f9}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;background:#f8fafc;padding:14px;border:1px solid #e2e8f0}svg{display:block;width:100%;height:auto}.figure,.evidence{border-top:1px solid #e2e8f0;margin-top:24px;padding-top:12px}summary{cursor:pointer;color:#2563eb;padding:10px 0}.answer-limitation{font-size:12px}.note{color:#475569;background:#f1f5f9;padding:12px}@media print{body{margin:0;padding:0;font-size:11pt}header,h2,h3{break-after:avoid}.figure svg{break-inside:avoid}details{display:block}details>pre{display:block}a{color:inherit}}</style></head><body><header><h1>DCMA 工业数据分析报告</h1><p>分析时间：${escapeHtml(stamp)}（北京时间）<br>分析引擎：${escapeHtml(message.engine ?? "未指定")}</p></header>${question ? `<section><h2>分析问题</h2><p>${escapeHtml(timeToSeconds(question))}</p></section>` : ""}<section><h2>分析结论</h2>${answer}</section>${figures}<section><h2>查询与资料证据</h2>${records}</section><p class="note">本报告保存本次回答与查询时的固定快照，不随实时数据更新。图表使用完整快照视野；数据范围、截断、缺失及资料适用条件以证据为准。模型建议不等于已确认的故障根因。浏览器可打开本文件并打印或保存为PDF。</p></body></html>`;
+	const style = `body{font:15px/1.8 system-ui,"Microsoft YaHei",sans-serif;color:#1e293b;max-width:1050px;margin:40px auto;padding:0 24px;-webkit-print-color-adjust:exact;print-color-adjust:exact}h1{font-size:28px;color:#0f172a}h2{margin-top:32px;font-size:21px}h3{font-size:17px}header{border-bottom:3px solid #2563eb;padding-bottom:18px}p{white-space:pre-wrap;overflow-wrap:anywhere}a{color:#2563eb;overflow-wrap:anywhere}table{border-collapse:collapse;width:100%;max-width:100%;margin:16px 0;table-layout:auto}table thead{display:table-header-group}table tr{break-inside:avoid}td,th{border:1px solid #cbd5e1;padding:8px 12px;text-align:left;vertical-align:top;overflow-wrap:anywhere}th{background:#f1f5f9;font-weight:600}tbody tr:nth-child(even) td{background:#f8fafc}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;background:#f8fafc;padding:14px;border:1px solid #e2e8f0}svg{display:block;width:100%;height:auto}.figure,.evidence{border-top:1px solid #e2e8f0;margin-top:24px;padding-top:12px}summary{cursor:pointer;color:#2563eb;padding:10px 0}.answer-limitation{font-size:12px}.note{color:#475569;background:#f1f5f9;padding:12px}@media print{body{margin:0;padding:0;font-size:11pt}header,h2,h3{break-after:avoid}.figure svg{break-inside:avoid}details{display:block}details>pre{display:block}a{color:inherit}table{display:table;width:100%}tbody tr:nth-child(even) td{background:transparent}}`;
+	return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'"><title>DCMA 分析报告</title><style>${style}</style></head><body><header><h1>DCMA 工业数据分析报告</h1><p>分析时间：${escapeHtml(stamp)}（北京时间）<br>分析引擎：${escapeHtml(message.engine ?? "未指定")}</p></header>${question ? `<section><h2>分析问题</h2><p>${escapeHtml(timeToSeconds(question))}</p></section>` : ""}<section><h2>分析结论</h2>${answer}</section>${figures}<section><h2>查询与资料证据</h2>${records}</section><p class="note">本报告保存本次回答与查询时的固定快照，不随实时数据更新。图表使用完整快照视野；数据范围、截断、缺失及资料适用条件以证据为准。模型建议不等于已确认的故障根因。浏览器可打开本文件并打印或保存为PDF。</p></body></html>`;
 }
-export async function completeMessageReport(message: ChatMessage, question = ""): Promise<string> {
+interface ReportArtifacts {
+	charts: ChartArtifact[];
+	evidence: EvidenceBundle | null;
+}
+async function loadReportArtifacts(message: ChatMessage): Promise<ReportArtifacts> {
 	const charts = await Promise.all(
 		(message.charts ?? []).map(async (reference) => {
 			const response = await fetch(`/api/tools/charts/${reference.id}.json`, { signal: AbortSignal.timeout(15000) });
@@ -72,5 +144,13 @@ export async function completeMessageReport(message: ChatMessage, question = "")
 	const evidence = expected.length ? await loadEvidence(message.id, AbortSignal.timeout(15000)) : null;
 	if (evidence && expected.some((id) => !evidence.records.some((record) => record.id === id)))
 		throw new Error("查询证据不完整，暂不能生成完整报告。");
+	return { charts, evidence };
+}
+export async function completeMessageReport(message: ChatMessage, question = ""): Promise<string> {
+	const { charts, evidence } = await loadReportArtifacts(message);
 	return analysisReportHtml(message, charts, evidence, question);
+}
+export async function completeMessageMarkdown(message: ChatMessage, question = ""): Promise<string> {
+	const { charts, evidence } = await loadReportArtifacts(message);
+	return reportMarkdown(message, charts, evidence, question);
 }

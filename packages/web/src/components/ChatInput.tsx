@@ -2,16 +2,33 @@ import { Mic, Paperclip, Send, Square } from "lucide-react";
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { defaultWebKeybindings } from "../keyboard.ts";
 import { checkMicrophoneAccess, startVoiceInput, voiceInputAvailable } from "../speech.ts";
+import { ColumnResizer } from "./ColumnResizer";
 export function ChatInput({
 	onSendMessage,
 	disabled,
 	onStop,
 	onImport,
+	model,
+	models,
+	onSelectModel,
+	columnWidth,
+	columnMaxWidth,
+	showColumnResizer,
+	onColumnWidthChange,
+	onColumnWidthReset,
 }: {
 	onSendMessage: (text: string) => void;
 	disabled: boolean;
 	onStop?: () => void;
 	onImport: () => void;
+	model: string;
+	models: { id: string; name: string }[];
+	onSelectModel: (id: string) => void;
+	columnWidth: number;
+	columnMaxWidth: number;
+	showColumnResizer: boolean;
+	onColumnWidthChange: (next: number) => void;
+	onColumnWidthReset: () => void;
 }) {
 	const [value, setValue] = useState("");
 	const [listening, setListening] = useState(false);
@@ -95,14 +112,6 @@ export function ChatInput({
 		<div className="chat-composer">
 			<div className="composer-content">
 				<div className="composer-box">
-					<button
-						type="button"
-						onClick={onImport}
-						aria-label="上传遥测日志或设备档案 (CSV/LOG)"
-						className="composer-attachment"
-					>
-						<Paperclip className="w-4 h-4" />
-					</button>
 					<textarea
 						aria-label="问题输入"
 						value={value}
@@ -120,34 +129,70 @@ export function ChatInput({
 						rows={2}
 						className="composer-textarea"
 					/>
-					<button
-						type="button"
-						onClick={() => void toggleVoice()}
-						disabled={disabled || !voiceAvailable}
-						aria-label={listening ? "结束语音输入" : "开始语音输入"}
-						aria-pressed={listening}
-						title="浏览器语音识别可能使用在线服务，识别文字确认后发送"
-						className={`composer-voice${listening ? " is-listening" : ""}`}
-					>
-						<Mic className="w-4 h-4 mx-auto" />
-						<span>{listening ? "结束输入" : "语音输入"}</span>
-					</button>
-					{disabled && onStop ? (
-						<button type="button" aria-label="停止生成" onClick={onStop} className="composer-send is-stop">
-							<Square className="w-4 h-4" />
-						</button>
-					) : (
+					<div className="composer-toolbar">
 						<button
 							type="button"
-							aria-label="发送问题"
-							disabled={disabled || !value.trim() || listening}
-							onClick={send}
-							className="composer-send"
+							onClick={onImport}
+							aria-label="上传遥测日志或设备档案 (CSV/LOG)"
+							title="上传遥测日志或设备档案"
+							className="composer-attachment"
 						>
-							<Send className="w-4 h-4" />
+							<Paperclip className="w-4 h-4" />
 						</button>
-					)}
+						<button
+							type="button"
+							onClick={() => void toggleVoice()}
+							disabled={disabled || !voiceAvailable}
+							aria-label={listening ? "结束语音输入" : "开始语音输入"}
+							aria-pressed={listening}
+							title="浏览器语音识别可能使用在线服务，识别文字确认后发送"
+							className={`composer-voice${listening ? " is-listening" : ""}`}
+						>
+							<Mic className="w-4 h-4" />
+						</button>
+						<span className="composer-spacer" />
+						<select
+							className="composer-model"
+							aria-label="切换模型"
+							title={
+								models.length ? "切换模型（在设置中可配置模型 API）" : "暂无可用模型，请打开设置配置模型 API"
+							}
+							value={models.some((item) => item.id === model) ? model : ""}
+							disabled={disabled || !models.length}
+							onChange={(event) => onSelectModel(event.target.value)}
+						>
+							<option value="">{models.length ? "选择模型" : "无可用模型"}</option>
+							{models.map((item) => (
+								<option value={item.id} key={item.id}>
+									{item.name.includes(" · ") ? item.name.slice(item.name.indexOf(" · ") + 3) : item.name}
+								</option>
+							))}
+						</select>
+						{disabled && onStop ? (
+							<button type="button" aria-label="停止生成" onClick={onStop} className="composer-send is-stop">
+								<Square className="w-4 h-4" />
+							</button>
+						) : (
+							<button
+								type="button"
+								aria-label="发送问题"
+								disabled={disabled || !value.trim() || listening}
+								onClick={send}
+								className="composer-send"
+							>
+								<Send className="w-4 h-4" />
+							</button>
+						)}
+					</div>
 				</div>
+				{showColumnResizer && (
+					<ColumnResizer
+						width={columnWidth}
+						maxWidth={columnMaxWidth}
+						onResize={onColumnWidthChange}
+						onReset={onColumnWidthReset}
+					/>
+				)}
 				<p
 					className="composer-note"
 					aria-live="polite"

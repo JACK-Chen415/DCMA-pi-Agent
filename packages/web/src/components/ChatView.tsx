@@ -10,11 +10,13 @@ export function ChatView({
 	isStreaming,
 	onRequery,
 	onViewAnalysis,
+	columnWidth,
 }: {
 	messages: ChatMessage[];
 	isStreaming: boolean;
 	onRequery?: (text: string) => void;
 	onViewAnalysis: (messageId: string) => void;
+	columnWidth: number;
 }) {
 	const bottom = useRef<HTMLDivElement>(null);
 	const last = messages.at(-1);
@@ -29,7 +31,7 @@ export function ChatView({
 			aria-busy={isStreaming}
 			className="flex-1 min-h-0 overflow-y-auto px-3 sm:px-6 py-5 w-full"
 		>
-			<div className="max-w-[800px] mx-auto space-y-5">
+			<div className="mx-auto space-y-5" style={{ maxWidth: `${columnWidth}px` }}>
 				{messages.map((message, index) => (
 					<div
 						key={message.id}
