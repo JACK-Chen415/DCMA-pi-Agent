@@ -31,6 +31,7 @@
 			"packages/*/test/**/*.ts",
 			"packages/web/src/**/*.tsx",
 			"packages/web/server.ts",
+			"packages/web/model-providers.ts",
 			"packages/web/database.ts",
 			"packages/web/tools/**/*.ts",
 			"packages/web/chart-contracts.ts",

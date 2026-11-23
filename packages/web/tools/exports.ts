@@ -9,6 +9,7 @@ const maximumBytes = 32 * 1024 * 1024;
 const formats: Record<string, string> = {
 	".html": "text/html",
 	".md": "text/markdown",
+	".pdf": "application/pdf",
 	".txt": "text/plain",
 	".json": "application/json",
 	".csv": "text/csv",

@@ -68,10 +68,30 @@ export interface AppSettings {
 	telemetryIntervalMs: number;
 	alarmThreshold: number;
 }
+export interface ModelProviderStatus {
+	id: string;
+	name: string;
+	baseUrl: string;
+	api: string;
+	apiKeyHint: string;
+	keyConfigured: boolean;
+	discoverModels: boolean;
+	builtin: boolean;
+	overridden: boolean;
+	models: string[];
+	source: "gateway" | "configured";
+	error?: string;
+}
 export interface BackendStatus {
 	connected: boolean;
 	models: { id: string; name: string }[];
+	providers?: ModelProviderStatus[];
 	message: string;
+}
+export interface ModelConfigPayload {
+	providers: ModelProviderStatus[];
+	models: { id: string; name: string }[];
+	error?: string;
 }
 export interface SuggestionCard {
 	id: string;

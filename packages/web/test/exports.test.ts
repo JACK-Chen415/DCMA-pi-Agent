@@ -58,6 +58,14 @@ test("local exports retain exact bytes at the chosen filename and replace a conf
 	const image = await fetch(f.url, { method: "POST", headers: headers("chart.png", "image/png"), body: bytes });
 	assert.equal(image.status, 200);
 	assert.deepEqual(await readFile(((await image.json()) as { path: string }).path), bytes);
+	const pdfBytes = Buffer.from("%PDF-1.4\n%dcma-report\n", "latin1");
+	const pdf = await fetch(f.url, {
+		method: "POST",
+		headers: headers("完整报告.pdf", "application/pdf"),
+		body: pdfBytes,
+	});
+	assert.equal(pdf.status, 200);
+	assert.deepEqual(await readFile(((await pdf.json()) as { path: string }).path), pdfBytes);
 });
 
 test("local exports reject methods, missing client marker, invalid filenames, types and empty files", async (context) => {

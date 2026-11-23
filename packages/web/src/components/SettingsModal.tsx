@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { AppSettings, BackendStatus } from "../types.ts";
 import { DatabasePanel } from "./DatabasePanel";
 import { Modal } from "./Modal";
+import { ModelApiPanel } from "./ModelApiPanel";
 export function SettingsModal({
 	settings,
 	backend,
@@ -13,12 +14,22 @@ export function SettingsModal({
 	backend: BackendStatus;
 	onClose: () => void;
 	onSave: (settings: AppSettings) => void;
-	onRefresh: () => void;
+	onRefresh: () => Promise<void>;
 }) {
 	const [draft, setDraft] = useState(settings);
 	const modelUnavailable = !backend.connected || !backend.models.length;
+	useEffect(() => {
+		if (backend.models.some((item) => item.id === draft.model)) return;
+		const fallback = backend.models[0]?.id ?? "";
+		if (fallback === draft.model) return;
+		setDraft((state) => ({ ...state, model: fallback }));
+	}, [backend.models, draft.model]);
 	return (
-		<Modal title="系统与诊断核心设置" subtitle="保存后应用到当前工作台，并保存在本浏览器" onClose={onClose}>
+		<Modal
+			title="系统与诊断核心设置"
+			subtitle="模型与 API 配置保存到本机后端；其它设置保存在本浏览器"
+			onClose={onClose}
+		>
 			<form
 				onSubmit={(event) => {
 					event.preventDefault();
@@ -28,26 +39,23 @@ export function SettingsModal({
 			>
 				<p className="text-xs text-slate-500">
 					{backend.message}
-					<button type="button" onClick={onRefresh} className="ml-2 text-blue-600">
-						刷新模型列表
+					<button
+						type="button"
+						onClick={() => {
+							void onRefresh();
+						}}
+						className="ml-2 text-blue-600"
+					>
+						重新读取全部模型
 					</button>
 				</p>
-				<label className="block">
-					DCMA Agent 模型
-					<select
-						className="form-control"
-						value={draft.model}
-						disabled={modelUnavailable}
-						onChange={(event) => setDraft({ ...draft, model: event.target.value })}
-					>
-						<option value="">请选择已授权模型</option>
-						{backend.models.map((model) => (
-							<option value={model.id} key={model.id}>
-								{model.name}
-							</option>
-						))}
-					</select>
-				</label>
+				<ModelApiPanel
+					providers={backend.providers ?? []}
+					models={backend.models}
+					model={draft.model}
+					onModelChange={(id) => setDraft((state) => ({ ...state, model: id }))}
+					onRefresh={onRefresh}
+				/>
 				<label className="flex items-start gap-2 text-xs">
 					<input
 						type="checkbox"
@@ -88,7 +96,8 @@ export function SettingsModal({
 					/>
 				</label>
 				<p className="text-xs text-slate-500">
-					DCMA Agent 的模型授权配置由本地后端读取。请配置服务器环境变量，随后刷新模型列表；密钥不发送到浏览器。
+					模型 API
+					配置保存在本机后端（.dcma-runtime/model-providers.json），其他浏览器打开本页也能看到同一组配置；密钥不会返回浏览器。
 				</p>
 				<div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
 					<button type="button" onClick={onClose} className="px-4 py-2 bg-slate-100 rounded-xl">

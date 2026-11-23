@@ -1,11 +1,72 @@
 import { type ChartReference, validateChartReference } from "../chart-contracts.ts";
 import { type ToolStep, updateToolSteps, validateToolSteps } from "../interaction-contracts.ts";
-import type { BackendStatus } from "./types.ts";
+import type { BackendStatus, ModelConfigPayload } from "./types.ts";
 
 export async function getBackendStatus(signal?: AbortSignal, refresh = false): Promise<BackendStatus> {
 	const response = await fetch(refresh ? "/api/health?refresh=1" : "/api/health", { signal });
 	if (!response.ok) throw new Error("本地后端未连接");
 	return (await response.json()) as BackendStatus;
+}
+
+async function modelConfigRequest(path: string, init?: RequestInit): Promise<ModelConfigPayload & { ok?: boolean }> {
+	const response = await fetch(path, init);
+	const body: unknown = await response.json();
+	if (!response.ok)
+		throw new Error(
+			body && typeof body === "object" && "error" in body && typeof body.error === "string"
+				? body.error
+				: `模型 API 配置请求失败（${response.status}）`,
+		);
+	if (!body || typeof body !== "object" || !("providers" in body)) throw new Error("模型 API 配置响应无效");
+	return body as ModelConfigPayload & { ok?: boolean };
+}
+
+export function getModelConfig(signal?: AbortSignal, refresh?: "all" | string): Promise<ModelConfigPayload> {
+	const query = refresh ? `?refresh=${encodeURIComponent(refresh)}` : "";
+	return modelConfigRequest(`/api/model-config${query}`, { signal });
+}
+
+export function saveModelProvider(input: {
+	provider: string;
+	name?: string;
+	baseUrl: string;
+	apiKey?: string;
+	discoverModels: boolean;
+	models?: string[];
+}): Promise<ModelConfigPayload> {
+	return modelConfigRequest("/api/model-config", {
+		method: "POST",
+		headers: { "Content-Type": "application/json", "X-DCMA-Client": "web" },
+		body: JSON.stringify(input),
+		signal: AbortSignal.timeout(40000),
+	});
+}
+
+export function deleteModelProvider(provider: string): Promise<ModelConfigPayload> {
+	return modelConfigRequest(`/api/model-config?provider=${encodeURIComponent(provider)}`, {
+		method: "DELETE",
+		headers: { "X-DCMA-Client": "web" },
+		signal: AbortSignal.timeout(40000),
+	});
+}
+
+/** Renders a self-contained HTML report into a PDF through the local backend. */
+export async function renderReportPdf(html: string): Promise<Blob> {
+	const response = await fetch("/api/reports/pdf", {
+		method: "POST",
+		headers: { "Content-Type": "text/html;charset=utf-8", "X-DCMA-Client": "web" },
+		body: html,
+		signal: AbortSignal.timeout(120000),
+	});
+	if (!response.ok) {
+		const body: unknown = await response.json().catch(() => null);
+		throw new Error(
+			body && typeof body === "object" && "error" in body && typeof body.error === "string"
+				? body.error
+				: `PDF 生成失败（${response.status}）`,
+		);
+	}
+	return await response.blob();
 }
 
 export async function streamChat(

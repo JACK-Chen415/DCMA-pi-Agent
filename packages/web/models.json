@@ -1,23 +1,25 @@
 {
   "providers": {
-    "deepseek": {
-      "baseUrl": "https://api.deepseek.com",
+    "lab": {
+      "name": "实验室网关",
+      "baseUrl": "http://10.108.13.250:18081/v1",
       "api": "openai-completions",
-      "apiKey": "${DEEPSEEK_API_KEY}",
+      "apiKey": "${LAB_API_KEY}",
+      "discoverModels": true,
       "models": [
         {
           "id": "deepseek-flash",
-          "name": "DeepSeek V4.1 Flash",
-          "reasoning": true,
+          "name": "DeepSeek Flash",
+          "reasoning": false,
           "input": ["text", "image"],
           "contextWindow": 1000000,
-          "maxTokens": 16384,
-          "cost": { "input": 0.3, "output": 1.2, "cacheRead": 0.006, "cacheWrite": 0 },
+          "maxTokens": 32768,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
           "compat": {
             "supportsStore": false,
             "supportsDeveloperRole": false,
-            "supportsReasoningEffort": true,
-            "thinkingFormat": "deepseek"
+            "supportsReasoningEffort": false,
+            "maxTokensField": "max_tokens"
           }
         }
       ]

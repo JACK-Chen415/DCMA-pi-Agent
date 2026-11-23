@@ -15,6 +15,7 @@ import { type DashboardTable, dashboardTables } from "../../dashboard/database/d
 import { createDatabaseServer } from "../../dashboard/database/server.ts";
 import { closeDatabase } from "./database.ts";
 import { getFaultKnowledgeHealth, listFaultKnowledgeSources, searchFaultKnowledge } from "./knowledge-index.ts";
+import { composeEffectiveModels, deleteProvider, type ProviderSummary, saveProvider } from "./model-providers.ts";
 import { createAnswerDelivery } from "./tools/answer.ts";
 import { chartToolEvent } from "./tools/chart-stream.ts";
 import { chatRunIdPattern, createChatRuns } from "./tools/chat-runs.ts";
@@ -27,6 +28,7 @@ import { handleExportHttp } from "./tools/exports.ts";
 import { handleToolHttp } from "./tools/http.ts";
 import { createIndustrialServices, createIndustrialTools } from "./tools/index.ts";
 import { createKnowledgeService } from "./tools/knowledge.ts";
+import { handleReportPdfHttp } from "./tools/report-pdf.ts";
 import { createIndustrialResourceLoader } from "./tools/resources.ts";
 import { preparePrivateDirectory } from "./tools/runtime-files.ts";
 import { createTextStream } from "./tools/text-stream.ts";
@@ -48,15 +50,48 @@ const resourceLoader = createIndustrialResourceLoader();
 const port = Number(process.env.DCMA_PORT ?? 3000);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("DCMA_PORT 必须是有效端口。");
 let runtimePromise: Promise<ModelRuntime> | undefined;
-const getRuntime = () => {
-	runtimePromise ??= ModelRuntime.create({ allowModelNetwork: false, modelsPath: resolve(root, "models.json") }).catch(
-		(error: unknown) => {
-			runtimePromise = undefined;
-			throw error;
-		},
-	);
+let providerSummaries: ProviderSummary[] = [];
+const modelsPath = resolve(root, "models.json");
+const providerStorePath = resolve(toolDirectory, "model-providers.json");
+const effectiveModelsPath = resolve(toolDirectory, "models.effective.json");
+async function createRuntime(refresh?: "all" | string[]): Promise<ModelRuntime> {
+	const composed = await composeEffectiveModels({
+		builtinPath: modelsPath,
+		storePath: providerStorePath,
+		effectivePath: effectiveModelsPath,
+		refresh,
+		signal: AbortSignal.timeout(30000),
+	});
+	providerSummaries = composed.providers;
+	return await ModelRuntime.create({ allowModelNetwork: false, modelsPath: composed.path });
+}
+const getRuntime = (refresh?: "all" | string[]) => {
+	if (refresh) runtimePromise = undefined;
+	runtimePromise ??= createRuntime(refresh).catch((error: unknown) => {
+		runtimePromise = undefined;
+		throw error;
+	});
 	return runtimePromise;
 };
+/** Only models whose API is configured in the app; the runtime's builtin provider catalogs must not leak in. */
+function availableModels(runtime: ModelRuntime) {
+	const configured = new Set(providerSummaries.map((entry) => entry.id));
+	return runtime.getAvailableSnapshot().filter((model) => configured.has(model.provider));
+}
+function modelOptions(runtime: ModelRuntime): { id: string; name: string }[] {
+	const order = providerSummaries.map((entry) => entry.id);
+	const label = new Map(providerSummaries.map((entry) => [entry.id, entry.name]));
+	return [...availableModels(runtime)]
+		.sort(
+			(a, b) =>
+				order.indexOf(a.provider) - order.indexOf(b.provider) ||
+				`${a.provider}/${a.id}`.localeCompare(`${b.provider}/${b.id}`),
+		)
+		.map((model) => ({
+			id: `${model.provider}/${model.id}`,
+			name: `${label.get(model.provider) ?? model.provider} · ${model.name}`,
+		}));
+}
 const activeSessions = new Set<Awaited<ReturnType<typeof createAgentSession>>["session"]>();
 let activeChatRequests = 0;
 
@@ -123,9 +158,73 @@ function validChat(value: unknown): value is {
 		})
 	);
 }
+async function modelConfigPayload(refresh?: "all" | string[]): Promise<{
+	providers: ProviderSummary[];
+	models: { id: string; name: string }[];
+	error?: string;
+}> {
+	try {
+		const runtime = await getRuntime(refresh);
+		return { providers: providerSummaries, models: modelOptions(runtime) };
+	} catch (error) {
+		return {
+			providers: providerSummaries,
+			models: [],
+			error: error instanceof Error ? error.message : "模型配置无法加载",
+		};
+	}
+}
+async function handleModelConfigHttp(request: IncomingMessage, response: ServerResponse, path: URL): Promise<void> {
+	if (request.method === "GET") {
+		const refreshParam = path.searchParams.get("refresh");
+		const refresh = refreshParam === "all" ? ("all" as const) : refreshParam ? [refreshParam] : undefined;
+		json(response, 200, await modelConfigPayload(refresh));
+		return;
+	}
+	if (request.headers["x-dcma-client"] !== "web") {
+		json(response, 403, { error: "请求来源无效" });
+		return;
+	}
+	if (request.method === "DELETE") {
+		const provider = path.searchParams.get("provider") ?? "";
+		const removed = await deleteProvider(providerStorePath, provider);
+		if (!removed.ok) {
+			json(response, 400, { error: removed.error });
+			return;
+		}
+		json(response, 200, { ok: true, ...(await modelConfigPayload([provider])) });
+		return;
+	}
+	if (request.method !== "POST" || !request.headers["content-type"]?.startsWith("application/json")) {
+		json(response, 405, { error: "仅支持读取、保存或删除模型 API 配置" });
+		return;
+	}
+	let body: unknown;
+	try {
+		body = await readBody(request);
+	} catch {
+		json(response, 400, { error: "请求必须是有效 JSON，且不得超过 512 KB" });
+		return;
+	}
+	if (!body || typeof body !== "object") {
+		json(response, 400, { error: "模型 API 配置格式无效" });
+		return;
+	}
+	const saved = await saveProvider(providerStorePath, modelsPath, body as Record<string, unknown>);
+	if (!saved.ok) {
+		json(response, 400, { error: saved.error });
+		return;
+	}
+	const provider = (body as Record<string, unknown>).provider;
+	json(response, 200, { ok: true, ...(await modelConfigPayload([String(provider)])) });
+}
 async function api(request: IncomingMessage, response: ServerResponse, path: URL): Promise<void> {
 	if (path.pathname === "/api/exports") {
 		await handleExportHttp(request, response);
+		return;
+	}
+	if (path.pathname === "/api/reports/pdf") {
+		await handleReportPdfHttp(request, response, toolDirectory);
 		return;
 	}
 	if (path.pathname.startsWith("/api/chat/")) {
@@ -201,24 +300,27 @@ async function api(request: IncomingMessage, response: ServerResponse, path: URL
 		return;
 	}
 	if (await handleToolHttp(request, response, path, industrial)) return;
+	if (path.pathname === "/api/model-config") {
+		await handleModelConfigHttp(request, response, path);
+		return;
+	}
 	if (path.pathname === "/api/health" && request.method === "GET") {
 		try {
-			const runtime = await getRuntime();
-			if (path.searchParams.has("refresh")) await runtime.refresh({ allowNetwork: false });
-			const models = runtime
-				.getAvailableSnapshot()
-				.map((model) => ({ id: `${model.provider}/${model.id}`, name: `${model.provider} · ${model.name}` }));
+			const runtime = await getRuntime(path.searchParams.has("refresh") ? "all" : undefined);
+			const models = modelOptions(runtime);
 			json(response, 200, {
 				connected: true,
 				models,
+				providers: providerSummaries,
 				message: models.length
 					? `DCMA Agent 已连接，${models.length} 个模型可选。`
-					: "DCMA Agent 已连接，尚无已授权模型；请配置服务器环境变量中的模型授权后使用 Agent 对话。",
+					: "DCMA Agent 已连接，尚无已授权模型；请在设置中配置模型 API 后使用 Agent 对话。",
 			});
 		} catch {
 			json(response, 200, {
 				connected: true,
 				models: [],
+				providers: providerSummaries,
 				message: "本地服务已连接；DCMA 模型初始化失败，请检查模型数据文件与本机模型配置。",
 			});
 		}
@@ -248,9 +350,9 @@ async function api(request: IncomingMessage, response: ServerResponse, path: URL
 		return;
 	}
 	const runtime = await getRuntime();
-	const model = runtime.getAvailableSnapshot().find((item) => `${item.provider}/${item.id}` === body.model);
+	const model = availableModels(runtime).find((item) => `${item.provider}/${item.id}` === body.model);
 	if (!model) {
-		json(response, 503, { error: "所选模型未授权或不可用。请授权后刷新模型列表。" });
+		json(response, 503, { error: "所选模型当前不可用。请在设置中切换模型，或检查该模型的 API 配置与密钥。" });
 		return;
 	}
 	const existing = chatRuns.get(body.requestId);
@@ -333,6 +435,13 @@ async function api(request: IncomingMessage, response: ServerResponse, path: URL
 			if (
 				event.type === "message_end" &&
 				event.message.role === "assistant" &&
+				event.message.stopReason === "error" &&
+				event.message.errorMessage
+			)
+				console.error(`DCMA 模型调用失败（${body.model}）：${event.message.errorMessage.slice(0, 2000)}`);
+			if (
+				event.type === "message_end" &&
+				event.message.role === "assistant" &&
 				!stoppedForDelivery &&
 				(event.message.stopReason === "error" ||
 					event.message.stopReason === "aborted" ||
@@ -354,7 +463,8 @@ async function api(request: IncomingMessage, response: ServerResponse, path: URL
 			if (failure) emit({ type: "error", message: failure });
 			else if (!answer) emit({ type: "error", message: "模型未返回文本，请尝试其他已授权模型。" });
 			else emit({ type: "done" });
-		} catch {
+		} catch (error) {
+			console.error(`DCMA 模型调用异常（${body.model}）：${error instanceof Error ? error.message : String(error)}`);
 			const answer = delivery.finish(draft);
 			if (answer) emit({ type: "delta", text: answer });
 			if (stoppedForDelivery) emit({ type: "done" });
@@ -366,7 +476,8 @@ async function api(request: IncomingMessage, response: ServerResponse, path: URL
 			session.dispose();
 			activeSessions.delete(session);
 		}
-	} catch {
+	} catch (error) {
+		console.error(`DCMA 模型初始化失败（${body.model}）：${error instanceof Error ? error.message : String(error)}`);
 		run.emit({ type: "error", message: "模型初始化失败，请检查本机模型配置。" });
 	} finally {
 		activeChatRequests--;
